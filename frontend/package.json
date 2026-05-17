@@ -1,0 +1,42 @@
+{
+  "name": "drawwork-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test:e2e": "playwright test",
+    "test:unit": "vitest run",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "^0.17.6",
+    "@xyflow/react": "^12.10.2",
+    "axios": "^1.6.5",
+    "html-to-image": "^1.11.13",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.21.3",
+    "y-websocket": "^2.0.3",
+    "yjs": "^13.6.10",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "happy-dom": "^20.9.0",
+    "jsdom": "^29.0.2",
+    "playwright": "^1.59.1",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.0.12",
+    "vitest": "^4.1.5"
+  }
+}

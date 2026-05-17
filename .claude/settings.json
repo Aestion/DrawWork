@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Bash(mcp2cli *)",
+      "Bash(curl *)",
+      "Bash(echo *)",
+      "Bash(python *)",
+      "Bash(node *)",
+      "Bash(npm *)",
+      "Bash(cd * && *)"
+    ],
+    "deny": [
+      "Read(.git/**)",
+      "Read(secrets/**)",
+      "Read(credentials.json)",
+      "Read(dev.db)",
+      "Read(node_modules/**)",
+      "Bash(rm -rf *)", 
+      "Bash(del *)", 
+      "Bash(format *)"
+    ],
+    "defaultMode": "bypassPermissions",
+    "additionalDirectories": [
+      "c:\\Users\\54656\\.claude",
+      "C:\\Users\\54656\\.claude",
+      "C:\\Users\\54656\\.openclaw",
+      "C:\\Users\\54656\\.cargo\\bin"
+    ]
+  }
+}

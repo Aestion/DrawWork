@@ -1,0 +1,7 @@
+pyautogui>=0.9.54
+Pillow>=10.0.0
+pytest>=8.0.0
+pytest-html>=4.0.0
+PyYAML>=6.0
+PyGetWindow>=0.0.9
+requests>=2.31.0

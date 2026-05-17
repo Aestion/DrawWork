@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Fix Excalidraw tool icon flickering */
+.sidebar-trigger.active,
+.sidebar-trigger:active,
+.sidebar-trigger:hover {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Disable any pulse or blink animations on sidebar triggers */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 1; }
+}

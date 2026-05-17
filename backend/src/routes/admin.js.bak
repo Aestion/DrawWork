@@ -1,0 +1,91 @@
+const router = require('express').Router()
+const { Op } = require('sequelize')
+const { authMiddleware, adminMiddleware } = require('../middleware/auth')
+const {
+  User, Profile, Board, Canvas, BoardShare, ShareToken,
+  Comment, CommentReply, Vote, VoteRecord, Notification,
+  MindMap, KanbanBoard, Swimlane, File, BoardVisit
+} = require('../models')
+
+// GET /api/admin/users — 用户列表（分页+搜索）
+router.get('/users', authMiddleware, adminMiddleware, async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1)
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20))
+    const offset = (page - 1) * limit
+    const search = (req.query.search || '').trim()
+
+    const where = {}
+    if (search) {
+      where[Op.or] = [
+        { username: { [Op.like]: `%${search}%` } },
+        { email: { [Op.like]: `%${search}%` } }
+      ]
+    }
+
+    const { count, rows } = await User.findAndCountAll({
+      where,
+      attributes: { exclude: ['password_hash'] },
+      offset,
+      limit,
+      order: [['created_at', 'DESC']]
+    })
+
+    res.json({ users: rows, total: count, page, limit })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/admin/users/:id — 启用/禁用用户
+router.put('/users/:id', authMiddleware, adminMiddleware, async (req, res, next) => {
+  try {
+    const user = await User.findByPk(req.params.id)
+    if (!user) {
+      return res.status(404).json({ error: '用户不存在' })
+    }
+    if (user.id === req.user.id) {
+      return res.status(400).json({ error: '不能禁用自己' })
+    }
+
+    user.is_active = !user.is_active
+    await user.save()
+
+    res.json({
+      message: user.is_active ? '用户已启用' : '用户已禁用',
+      user: { id: user.id, username: user.username, is_active: user.is_active }
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/admin/backup — 导出全表数据（只读）
+router.post('/backup', authMiddleware, adminMiddleware, async (req, res, next) => {
+  try {
+    const backup = {
+      exported_at: new Date().toISOString(),
+      users: await User.findAll({ attributes: { exclude: ['password_hash'] }, raw: true }),
+      profiles: await Profile.findAll({ raw: true }),
+      boards: await Board.findAll({ raw: true }),
+      canvases: await Canvas.findAll({ raw: true }),
+      boardShares: await BoardShare.findAll({ raw: true }),
+      shareTokens: await ShareToken.findAll({ raw: true }),
+      comments: await Comment.findAll({ raw: true }),
+      commentReplies: await CommentReply.findAll({ raw: true }),
+      votes: await Vote.findAll({ raw: true }),
+      voteRecords: await VoteRecord.findAll({ raw: true }),
+      notifications: await Notification.findAll({ raw: true }),
+      mindMaps: await MindMap.findAll({ raw: true }),
+      kanbanBoards: await KanbanBoard.findAll({ raw: true }),
+      swimlanes: await Swimlane.findAll({ raw: true }),
+      files: await File.findAll({ raw: true }),
+      boardVisits: await BoardVisit.findAll({ raw: true })
+    }
+    res.json(backup)
+  } catch (err) {
+    next(err)
+  }
+})
+
+module.exports = router

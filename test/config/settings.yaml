@@ -1,0 +1,42 @@
+# DrawWork Test Framework — Global Settings
+
+services:
+  backend:
+    port: 3000
+    health_url: "http://localhost:3000/health"
+    start_timeout: 20       # seconds
+  yjs:
+    port: 3001
+    start_timeout: 15
+  frontend:
+    port: 5173
+    url: "http://localhost:5173"
+    start_timeout: 25
+
+visual:
+  diff_threshold: 0.05     # 5% pixel difference = fail
+  baseline_dir: "visual-baseline/baselines"
+
+loop:
+  max_retries: 5            # per test case
+  max_loop_time: 1800       # 30 min total
+  poll_interval: 5          # seconds between fix-request checks
+
+accounts:
+  auto_register: true
+  prefix: "e2e_test_"
+  default_password: "TestPass123!"
+
+browser:
+  chrome_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  window_title_patterns:
+    - "localhost:5173"
+    - "DrawWork"
+    - "Vite"
+    - "localhost"
+
+reports:
+  output_dir: "results/reports"
+  formats:
+    - json
+    - html
