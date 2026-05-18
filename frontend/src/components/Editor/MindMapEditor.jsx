@@ -146,24 +146,34 @@ const edgeTypes = {
   mindmap: MindMapEdge
 }
 
-// Mind map edge component with smooth bezier curves
-function MindMapEdge({ id, sourceX, sourceY, targetX, targetY, selected }) {
+// Mind map edge component - supports different path types based on node depth
+function MindMapEdge({ id, source, target, sourceX, sourceY, targetX, targetY, selected }) {
+  const sourceNode = useStore(useCallback((store) => store.nodeLookup.get(source) || null, [source]))
+  const targetNode = useStore(useCallback((store) => store.nodeLookup.get(target) || null, [target]))
+
   const edgePath = useMemo(() => {
-    // Calculate bezier control points based on distance
-    const dx = Math.abs(targetX - sourceX)
-    const controlOffset = Math.max(dx * 0.5, 50)
+    const sourceDepth = sourceNode?.data?.depth || 0
+    const targetDepth = targetNode?.data?.depth || 0
 
-    let path
-    if (targetX > sourceX) {
-      // Target is to the right of source
-      path = `M ${sourceX} ${sourceY} C ${sourceX + controlOffset} ${sourceY}, ${targetX - controlOffset} ${targetY}, ${targetX} ${targetY}`
+    // 判断是否是根节点与1级子节点连接
+    const isRootToLevel1 = (sourceDepth === 0 && targetDepth === 1) || (sourceDepth === 1 && targetDepth === 0)
+
+    if (isRootToLevel1) {
+      // 保持现有的贝塞尔曲线
+      const dx = Math.abs(targetX - sourceX)
+      const controlOffset = Math.max(dx * 0.5, 50)
+      let path
+      if (targetX > sourceX) {
+        path = `M ${sourceX} ${sourceY} C ${sourceX + controlOffset} ${sourceY}, ${targetX - controlOffset} ${targetY}, ${targetX} ${targetY}`
+      } else {
+        path = `M ${sourceX} ${sourceY} C ${sourceX - controlOffset} ${sourceY}, ${targetX + controlOffset} ${targetY}, ${targetX} ${targetY}`
+      }
+      return path
     } else {
-      // Target is to the left of source
-      path = `M ${sourceX} ${sourceY} C ${sourceX - controlOffset} ${sourceY}, ${targetX + controlOffset} ${targetY}, ${targetX} ${targetY}`
+      // 其他级别使用直线+转角
+      return getRectilinearPath({ sourceX, sourceY, targetX, targetY })
     }
-
-    return path
-  }, [sourceX, sourceY, targetX, targetY])
+  }, [sourceNode, targetNode, sourceX, sourceY, targetX, targetY])
 
   return (
     <BaseEdge
@@ -172,10 +182,32 @@ function MindMapEdge({ id, sourceX, sourceY, targetX, targetY, selected }) {
       style={{
         stroke: selected ? '#3b82f6' : '#94a3b8',
         strokeWidth: selected ? 2.5 : 1.5,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
         transition: 'stroke 0.15s, stroke-width 0.15s'
       }}
     />
   )
+}
+
+// 直线转角路径算法
+function getRectilinearPath({ sourceX, sourceY, targetX, targetY }) {
+  // Spread the bend point proportionally to the perpendicular distance,
+  // so sibling paths fan out instead of overlapping. Clamped to stay
+  // between source and target to prevent backward segments.
+  const SPREAD = 0.6
+
+  if (Math.abs(targetX - sourceX) > Math.abs(targetY - sourceY)) {
+    const midX = (sourceX + targetX) / 2
+    const bendX = midX + (targetY - sourceY) * SPREAD
+    const clampedX = Math.min(Math.max(bendX, Math.min(sourceX, targetX) + 5), Math.max(sourceX, targetX) - 5)
+    return `M ${sourceX} ${sourceY} H ${clampedX} V ${targetY} H ${targetX}`
+  } else {
+    const midY = (sourceY + targetY) / 2
+    const bendY = midY + (targetX - sourceX) * SPREAD
+    const clampedY = Math.min(Math.max(bendY, Math.min(sourceY, targetY) + 5), Math.max(sourceY, targetY) - 5)
+    return `M ${sourceX} ${sourceY} V ${clampedY} H ${targetX} V ${targetY}`
+  }
 }
 
 // Media item component
@@ -234,6 +266,10 @@ function MindNode({ id, data, selected }) {
   const [showMedia, setShowMedia] = useState(true)
   const inputRef = useRef(null)
   const media = data.media || []
+
+  // 视觉反馈：检查当前节点是否是拖动目标
+  const dragTargetNode = useContext(MindMapActionsContext)?.dragTargetNode
+  const isDragTarget = dragTargetNode?.id === id
 
   const mindMapActions = useContext(MindMapActionsContext)
   const isRoot = mindMapActions?.rootIds?.has(id) || false
@@ -324,11 +360,13 @@ function MindNode({ id, data, selected }) {
       className={`relative rounded-lg border-2 transition-all ${
         isSelected
           ? 'border-blue-500 bg-blue-50 shadow-lg'
-          : data.depth === 0
-            ? 'border-amber-400 bg-amber-50 hover:border-amber-500 font-bold'
-            : data.depth === 1
-              ? 'border-sky-400 bg-sky-50 hover:border-sky-500 font-medium'
-              : 'border-gray-300 bg-white hover:border-gray-400'
+          : isDragTarget
+            ? 'border-green-500 bg-green-50 shadow-lg ring-2 ring-green-500 ring-offset-2'
+            : data.depth === 0
+              ? 'border-amber-400 bg-amber-50 hover:border-amber-500 font-bold'
+              : data.depth === 1
+                ? 'border-sky-400 bg-sky-50 hover:border-sky-500 font-medium'
+                : 'border-gray-300 bg-white hover:border-gray-400'
       } ${isCurrentMatch ? '!ring-2 !ring-blue-500 !ring-offset-2' : ''}`}
       style={{
         ...(data.style?.bgColor ? { backgroundColor: data.style.bgColor } : {}),
@@ -632,6 +670,10 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
   const clipboardRef = useRef(null)
   const viewportRef = useRef({ x: 0, y: 0, zoom: 1 })
 
+  // 视觉反馈状态
+  const [dragTargetNode, setDragTargetNode] = useState(null)
+  const [dragDistance, setDragDistance] = useState(null)
+
   // Cross-connection state
   const [pendingCrossSource, setPendingCrossSource] = useState(null)
 
@@ -766,7 +808,8 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
     }
   }, [canvasId])
 
-  // Report connection status to parent (EditorPage)
+  // Report connection status to parent (EditorPage) - with debounce!
+  const lastReportedStatusRef = useRef(null)
   useEffect(() => {
     if (!onConnectionChange) return
     // 如果正在切换画布或编辑器未激活，暂时不更新状态
@@ -777,7 +820,19 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
       : connected
         ? (synced ? 'synced' : 'syncing')
         : 'disconnected'
-    onConnectionChange({ connected, synced, label, onlineCount }, canvasId)
+
+    const statusToReport = { connected, synced, label, onlineCount }
+
+    // 只有状态真的变化时才报告（避免不必要的更新）
+    const lastStatus = lastReportedStatusRef.current
+    if (!lastStatus ||
+        lastStatus.connected !== connected ||
+        lastStatus.synced !== synced ||
+        lastStatus.onlineCount !== onlineCount ||
+        lastStatus.label !== label) {
+      lastReportedStatusRef.current = statusToReport
+      onConnectionChange(statusToReport, canvasId)
+    }
   }, [connected, synced, onlineCount, canEdit, onConnectionChange, isActive, canvasId])
 
   // React Flow change handlers.
@@ -802,23 +857,12 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
   // Drag handlers for subtree dragging
   const onNodeDragStart = useCallback((event, node) => {
     dragStartPosRef.current = { id: node.id, x: node.position.x, y: node.position.y }
+    setDragTargetNode(null)
+    setDragDistance(null)
   }, [])
 
-  const captureUndoRef = useRef(null)
-  // Will be set after captureUndo is defined
-
-  const onNodeDragStop = useCallback((event, node) => {
-    const start = dragStartPosRef.current
-    if (!start || start.id !== node.id) return
-
-    const deltaX = node.position.x - start.x
-    const deltaY = node.position.y - start.y
-    dragStartPosRef.current = null
-
-    // Ignore tiny movements (clicks, not drags)
-    if (Math.abs(deltaX) < 5 && Math.abs(deltaY) < 5) return
-
-    // --- REPARENTING: check if dropped near another node ---
+  const onNodeDrag = useCallback((event, node) => {
+    // 检查与其他节点的重叠情况，并更新视觉反馈
     const isRoot = !edgesRef.current.some(
       e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
     )
@@ -849,69 +893,300 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
         }
       }
 
-      // Find nearest valid target node within 150px
-      const threshold = 150
-      let bestNode = null
-      let bestDist = threshold
+      // 查找重叠的节点
+      const NODE_WIDTH = 150
+      const NODE_HEIGHT = 50
+      const OVERLAP_THRESHOLD = 0.3 // 视觉反馈使用较低的阈值，给用户提前提示
+
+      let targetNode = null
+      let maxOverlap = 0
+
       for (const n of nodesRef.current) {
         if (excludeIds.has(n.id)) continue
-        const dx = node.position.x - n.position.x
-        const dy = node.position.y - n.position.y
-        const dist = Math.sqrt(dx * dx + dy * dy)
-        if (dist < bestDist) {
-          bestDist = dist
-          bestNode = n
+
+        // 计算两个节点的边界框
+        const nodeA = {
+          left: node.position.x - NODE_WIDTH / 2,
+          right: node.position.x + NODE_WIDTH / 2,
+          top: node.position.y - NODE_HEIGHT / 2,
+          bottom: node.position.y + NODE_HEIGHT / 2
+        }
+        const nodeB = {
+          left: n.position.x - NODE_WIDTH / 2,
+          right: n.position.x + NODE_WIDTH / 2,
+          top: n.position.y - NODE_HEIGHT / 2,
+          bottom: n.position.y + NODE_HEIGHT / 2
+        }
+
+        // 计算重叠区域
+        const overlapLeft = Math.max(nodeA.left, nodeB.left)
+        const overlapRight = Math.min(nodeA.right, nodeB.right)
+        const overlapTop = Math.max(nodeA.top, nodeB.top)
+        const overlapBottom = Math.min(nodeA.bottom, nodeB.bottom)
+
+        // 检查是否有重叠
+        if (overlapLeft < overlapRight && overlapTop < overlapBottom) {
+          const overlapWidth = overlapRight - overlapLeft
+          const overlapHeight = overlapBottom - overlapTop
+          const overlapArea = overlapWidth * overlapHeight
+          const nodeArea = NODE_WIDTH * NODE_HEIGHT
+          const overlapRatio = overlapArea / nodeArea
+
+          // 记录重叠面积最大的节点
+          if (overlapRatio > maxOverlap && overlapRatio >= OVERLAP_THRESHOLD) {
+            maxOverlap = overlapRatio
+            targetNode = n
+          }
         }
       }
 
-      if (bestNode) {
+      setDragTargetNode(targetNode)
+      setDragDistance(targetNode ? (1 - maxOverlap) : null)
+    }
+  }, [canEdit])
+
+  const captureUndoRef = useRef(null)
+  // Will be set after captureUndo is defined
+
+  const onNodeDragStop = useCallback((event, node) => {
+    const start = dragStartPosRef.current
+    if (!start || start.id !== node.id) return
+
+    dragStartPosRef.current = null
+
+    // 清除视觉反馈
+    setDragTargetNode(null)
+    setDragDistance(null)
+
+    // Ignore tiny movements (clicks, not drags)
+    if (Math.abs(node.position.x - start.x) < 5 && Math.abs(node.position.y - start.y) < 5) return
+
+    // --- CHECK: if it's a level 1 node (child of root) ---
+    let rootNode = null
+    let isLevel1Node = false
+    for (const edge of edgesRef.current) {
+      if (edge.data?.crossConnection || edge.type === 'crossConnection') continue
+      if (edge.target === node.id) {
+        const potentialRoot = nodesRef.current.find(n => n.id === edge.source)
+        if (potentialRoot && potentialRoot.data?.side === 'center') {
+          isLevel1Node = true
+          rootNode = potentialRoot
+          break
+        }
+      }
+    }
+
+    // --- CASE 1: level 1 node, check if we should switch sides ---
+    if (isLevel1Node && rootNode && canEdit) {
+      const rootX = rootNode.position.x
+      const nodeX = node.position.x
+      const currentSide = node.data?.side
+
+      // 判断是否需要切换侧
+      const shouldSwitchSide =
+        (nodeX < rootX && currentSide === 'right') ||
+        (nodeX > rootX && currentSide === 'left')
+
+      const MIN_SWITCH_DISTANCE = 50
+
+      if (shouldSwitchSide && Math.abs(nodeX - rootX) > MIN_SWITCH_DISTANCE) {
         captureUndoRef.current()
-        const targetId = bestNode.id
-        const newEdges = edgesRef.current.map(e => {
-          if (e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection') {
-            return { ...e, source: targetId, id: `edge-${targetId}-${node.id}` }
+
+        // 更新节点 side 属性
+        const updatedNodes = nodesRef.current.map(n => {
+          if (n.id === node.id) {
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                side: currentSide === 'left' ? 'right' : 'left'
+              }
+            }
           }
-          return e
+          return n
         })
-        // Recalculate layout preserving all existing positions
+
+        // 重新计算布局
         const savedPositions = new Map(nodesRef.current.map(n => [n.id, n.position]))
-        const savedLayouts = new Map(nodesRef.current.filter(n => !newEdges.some(e => e.target === n.id)).map(n => [n.id, n.data?.layout]))
+        const savedLayouts = new Map(nodesRef.current.filter(n => n.data?.side === 'center').map(n => [n.id, n.data?.layout]))
         const getLayoutForRoot = (rootId) => savedLayouts.get(rootId) || 'horizontal'
-        const result = calculateMultiTreeLayout(nodesRef.current, newEdges, getLayoutForRoot)
+        const result = calculateMultiTreeLayout(updatedNodes, edgesRef.current, getLayoutForRoot)
+
+        // 保持原有位置
         result.nodes = result.nodes.map(n => {
           const saved = savedPositions.get(n.id)
           if (saved) return { ...n, position: { ...saved } }
           return n
         })
+
         setNodes(result.nodes)
-        setEdges(newEdges)
+        setEdges(result.edges)
         return
       }
     }
 
-    // --- NO REPARENT: offset descendants by drag delta ---
-    const descendantIds = new Set()
-    const dq = [node.id]
-    const dVisited = new Set()
-    while (dq.length > 0) {
-      const currentId = dq.shift()
-      if (dVisited.has(currentId)) continue
-      dVisited.add(currentId)
+    // --- CASE 2: REPARENTING: check if dropped overlapping another node ---
+    const isRoot = !edgesRef.current.some(
+      e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
+    )
+
+    if (canEdit && !isRoot) {
+      // Collect IDs to exclude: self + all descendants + current parent
+      const excludeIds = new Set([node.id])
+      const queue = [node.id]
+      const visited = new Set()
+      while (queue.length > 0) {
+        const currentId = queue.shift()
+        if (visited.has(currentId)) continue
+        visited.add(currentId)
+        for (const edge of edgesRef.current) {
+          if (edge.data?.crossConnection || edge.type === 'crossConnection') continue
+          if (edge.source === currentId && !visited.has(edge.target)) {
+            excludeIds.add(edge.target)
+            queue.push(edge.target)
+          }
+        }
+      }
+      // Exclude current parent
+      let currentParentId = null
       for (const edge of edgesRef.current) {
         if (edge.data?.crossConnection || edge.type === 'crossConnection') continue
-        if (edge.source === currentId && !dVisited.has(edge.target)) {
-          descendantIds.add(edge.target)
-          dq.push(edge.target)
+        if (edge.target === node.id) {
+          excludeIds.add(edge.source)
+          currentParentId = edge.source
+          break
         }
+      }
+
+      // 查找重叠的节点：检查节点是否与另一个节点重叠
+      // 使用节点的位置和大小来判断是否重叠
+      // 假设节点大小为：宽度 150，高度 50（根据实际UI调整）
+      const NODE_WIDTH = 150
+      const NODE_HEIGHT = 50
+      const OVERLAP_THRESHOLD = 0.5 // 重叠面积超过 50% 才触发
+
+      let targetNode = null
+
+      for (const n of nodesRef.current) {
+        if (excludeIds.has(n.id)) continue
+
+        // 计算两个节点的边界框
+        const nodeA = {
+          left: node.position.x - NODE_WIDTH / 2,
+          right: node.position.x + NODE_WIDTH / 2,
+          top: node.position.y - NODE_HEIGHT / 2,
+          bottom: node.position.y + NODE_HEIGHT / 2
+        }
+        const nodeB = {
+          left: n.position.x - NODE_WIDTH / 2,
+          right: n.position.x + NODE_WIDTH / 2,
+          top: n.position.y - NODE_HEIGHT / 2,
+          bottom: n.position.y + NODE_HEIGHT / 2
+        }
+
+        // 计算重叠区域
+        const overlapLeft = Math.max(nodeA.left, nodeB.left)
+        const overlapRight = Math.min(nodeA.right, nodeB.right)
+        const overlapTop = Math.max(nodeA.top, nodeB.top)
+        const overlapBottom = Math.min(nodeA.bottom, nodeB.bottom)
+
+        // 检查是否有重叠
+        if (overlapLeft < overlapRight && overlapTop < overlapBottom) {
+          const overlapWidth = overlapRight - overlapLeft
+          const overlapHeight = overlapBottom - overlapTop
+          const overlapArea = overlapWidth * overlapHeight
+          const nodeArea = NODE_WIDTH * NODE_HEIGHT
+
+          // 如果重叠面积超过阈值，则触发父节点更换
+          if (overlapArea / nodeArea >= OVERLAP_THRESHOLD) {
+            targetNode = n
+            break
+          }
+        }
+      }
+
+      if (targetNode) {
+        captureUndoRef.current()
+        const targetId = targetNode.id
+        const savedLayouts = new Map(nodesRef.current.filter(n => !edgesRef.current.some(e => e.target === n.id)).map(n => [n.id, n.data?.layout]))
+        const getLayoutForRoot = (rootId) => savedLayouts.get(rootId) || 'horizontal'
+
+        // Create new edge (source = target parent)
+        const newEdgeId = `edge-${targetId}-${node.id}`
+        const newEdge = { id: newEdgeId, source: targetId, target: node.id, type: 'mindmap' }
+
+        // Build edges: replace old edge with new edge, ordered by Y for insert position
+        const oldEdgeId = edgesRef.current.find(
+          e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
+        )?.id
+        const edgesWithoutNew = edgesRef.current.filter(e => e.id !== oldEdgeId && e.id !== newEdgeId)
+        const siblingEdgeData = edgesWithoutNew
+          .filter(e => e.source === targetId && !e.data?.crossConnection && e.type !== 'crossConnection')
+          .map(e => ({
+            edge: e,
+            y: nodesRef.current.find(n => n.id === e.target)?.position?.y || 0
+          })).sort((a, b) => a.y - b.y)
+        let insertIdx = siblingEdgeData.length
+        for (let i = 0; i < siblingEdgeData.length; i++) {
+          if (node.position.y < siblingEdgeData[i].y) { insertIdx = i; break }
+        }
+        const nonSiblingEdges = edgesWithoutNew.filter(
+          e => !(e.source === targetId && !e.data?.crossConnection && e.type !== 'crossConnection')
+        )
+        const siblingEdges = siblingEdgeData.map(d => d.edge)
+        siblingEdges.splice(insertIdx, 0, newEdge)
+        const newEdges = [...nonSiblingEdges, ...siblingEdges]
+
+        // Compute full layout from scratch with new tree structure
+        const result = calculateMultiTreeLayout(nodesRef.current, newEdges, getLayoutForRoot)
+        const layoutPositions = new Map(result.nodes.map(n => [n.id, n.position]))
+
+        // Helper: find the root ancestor of a node in the new edge structure
+        const findRoot = (nodeId) => {
+          let current = nodeId
+          while (true) {
+            const parentEdge = newEdges.find(e => e.target === current && !e.data?.crossConnection && e.type !== 'crossConnection')
+            if (!parentEdge) return current
+            current = parentEdge.source
+          }
+        }
+
+        // Identify affected roots: old parent's root and new parent's root
+        const oldParentEdge = edgesRef.current.find(
+          e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
+        )
+        const newParentRoot = findRoot(targetId)
+        const oldParentRoot = oldParentEdge ? findRoot(oldParentEdge.source) : null
+        const affectedRoots = new Set([newParentRoot])
+        if (oldParentRoot) affectedRoots.add(oldParentRoot)
+
+        // For each node: if its root is affected → translate layout pos; else → preserve actual pos
+        result.nodes = result.nodes.map(n => {
+          const nodeRoot = findRoot(n.id)
+          if (affectedRoots.has(nodeRoot)) {
+            const rootLayoutPos = layoutPositions.get(nodeRoot)
+            const rootActualPos = nodesRef.current.find(p => p.id === nodeRoot)?.position
+            if (rootLayoutPos && rootActualPos) {
+              const dx = rootActualPos.x - rootLayoutPos.x
+              const dy = rootActualPos.y - rootLayoutPos.y
+              return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+            }
+          }
+          const actual = nodesRef.current.find(p => p.id === n.id)
+          if (actual) return { ...n, position: { ...actual.position } }
+          return n
+        })
+        setNodes(result.nodes)
+        setEdges(result.edges)
+        return
       }
     }
 
-    if (descendantIds.size === 0) return
-
+    // --- NO REPARENT: snap dragged node back to original position ---
     setNodes((prevNodes) =>
       prevNodes.map((n) => {
-        if (descendantIds.has(n.id)) {
-          return { ...n, position: { x: n.position.x + deltaX, y: n.position.y + deltaY } }
+        if (n.id === node.id) {
+          return { ...n, position: { x: start.x, y: start.y } }
         }
         return n
       })
@@ -1879,8 +2154,9 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
 
   const mindMapActions = useMemo(() => ({
     toggleLayout: toggleRootLayout,
-    rootIds
-  }), [toggleRootLayout, rootIds])
+    rootIds,
+    dragTargetNode
+  }), [toggleRootLayout, rootIds, dragTargetNode])
 
   if (yjsLoading) {
     return (
@@ -2145,6 +2421,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeDragStart={canEdit ? onNodeDragStart : undefined}
+            onNodeDrag={canEdit ? onNodeDrag : undefined}
             onNodeDragStop={canEdit ? onNodeDragStop : undefined}
             onSelectionChange={onSelectionChange}
             onConnect={canEdit ? onConnect : undefined}
@@ -2239,4 +2516,5 @@ function SearchLocator({ currentMatchId, nodes }) {
   }, [currentMatchId, nodes, setCenter])
   return null
 }
+
 

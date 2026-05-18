@@ -27,7 +27,7 @@ export default function EditorPage() {
   const [board, setBoard] = useState(null)
   // 优化连接状态管理，避免不必要的闪烁
   const [connectionStatus, setConnectionStatus] = useState({ connected: false, synced: false, label: 'disconnected', onlineCount: 1 })
-  const lastConnectedStatusRef = useRef(false)
+  const lastStatusRef = useRef(connectionStatus)
   const activeCanvasIdRef = useRef(null)
 
   const handleConnectionChange = useCallback((status, canvasId) => {
@@ -45,17 +45,20 @@ export default function EditorPage() {
     }
 
     // 只有在连接状态真正发生变化时才更新（避免同一状态重复更新）
-    // 同时确保状态值具有实际意义（防止 undefined 或 null）
-    if ((lastConnectedStatusRef.current !== status.connected ||
-        connectionStatus.synced !== status.synced ||
-        connectionStatus.onlineCount !== status.onlineCount) &&
+    // 使用 ref 而不是 useState 值来避免无限循环（严重 bug 修复！）
+    const lastStatus = lastStatusRef.current
+    const hasChanged = lastStatus.connected !== status.connected ||
+                      lastStatus.synced !== status.synced ||
+                      lastStatus.onlineCount !== status.onlineCount
+
+    if (hasChanged &&
         newStatus.connected !== undefined &&
         newStatus.synced !== undefined &&
         newStatus.label) {
-      lastConnectedStatusRef.current = status.connected
+      lastStatusRef.current = newStatus
       setConnectionStatus(newStatus)
     }
-  }, [connectionStatus.synced, connectionStatus.onlineCount])
+  }, [])
   const [showSharePanel, setShowSharePanel] = useState(false)
   const [showVersionHistory, setShowVersionHistory] = useState(false)
   const [showVotePanel, setShowVotePanel] = useState(false)

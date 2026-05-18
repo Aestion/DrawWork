@@ -3,7 +3,7 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
 // Derive WebSocket URL: use VITE_YJS_WS_URL env, or build from current location
-const DEFAULT_WS_PORT = 3005
+const DEFAULT_WS_PORT = 3001
 function getWsUrl() {
   if (import.meta.env.VITE_YJS_WS_URL) {
     return import.meta.env.VITE_YJS_WS_URL
@@ -68,16 +68,27 @@ function getConnection(roomId, token, type = 'excalidraw') {
     syncListeners: new Set(),
     observers: new Set(),
     awarenessListeners: new Set(),
-    pendingData: null
+    pendingData: null,
+    // 新增：状态防抖相关
+    lastStatus: null,
+    lastSync: null
   }
 
   // Wire up provider events to listeners
   provider.on('status', (event) => {
-    conn.statusListeners.forEach((cb) => cb(event))
+    // 状态防抖：只有在状态真正变化时才触发事件
+    if (conn.lastStatus !== event.status) {
+      conn.lastStatus = event.status
+      conn.statusListeners.forEach((cb) => cb(event))
+    }
   })
 
   provider.on('sync', (isSynced) => {
-    conn.syncListeners.forEach((cb) => cb(isSynced))
+    // 状态防抖：只有在状态真正变化时才触发事件
+    if (conn.lastSync !== isSynced) {
+      conn.lastSync = isSynced
+      conn.syncListeners.forEach((cb) => cb(isSynced))
+    }
   })
 
   // Wire up awareness changes
@@ -130,6 +141,8 @@ export function useYjs(roomId, token, options = {}) {
   const connRef = useRef(null)
   const syncedRef = useRef(false)
   const connectedRef = useRef(false)
+  const statusDebounceRef = useRef(null)
+  const syncDebounceRef = useRef(null)
 
   useEffect(() => {
     if (!roomId || !token) return
@@ -163,37 +176,53 @@ export function useYjs(roomId, token, options = {}) {
 
     const handleStatus = (event) => {
       const isNowConnected = event.status === 'connected'
-      connectedRef.current = isNowConnected
-      setConnected(isNowConnected)
-      if (isNowConnected) {
-        // Re-set awareness when reconnecting
-        conn.awareness.setLocalState({ user: 'anonymous', timestamp: Date.now() })
-      } else {
-        syncedRef.current = false
-        setSynced(false)
+
+      // 清除之前的防抖定时器
+      if (statusDebounceRef.current) {
+        clearTimeout(statusDebounceRef.current)
       }
+
+      // 防抖处理：避免状态频繁切换
+      statusDebounceRef.current = setTimeout(() => {
+        // 只有在状态真正变化时才更新
+        if (connectedRef.current !== isNowConnected) {
+          connectedRef.current = isNowConnected
+          setConnected(isNowConnected)
+
+          if (isNowConnected) {
+            // Re-set awareness when reconnecting
+            conn.awareness.setLocalState({ user: 'anonymous', timestamp: Date.now() })
+          } else {
+            syncedRef.current = false
+            setSynced(false)
+          }
+        }
+      }, 100) // 100ms 防抖
     }
 
     const handleSync = (isSynced) => {
-      syncedRef.current = isSynced
-      setSynced(isSynced)
+      // 只有在同步状态真正变化时才更新
+      if (syncedRef.current !== isSynced) {
+        syncedRef.current = isSynced
+        setSynced(isSynced)
 
-      if (isSynced) {
-        // Notify observers of initial state
-        const data = extractData(conn.yMap)
-        conn.observers.forEach((cb) => cb(data, { source: 'initial' }))
+        if (isSynced) {
+          // Notify observers of initial state
+          const data = extractData(conn.yMap)
+          conn.observers.forEach((cb) => cb(data, { source: 'initial' }))
 
-        // Flush pending data
-        if (conn.pendingData) {
-          const pending = conn.pendingData
-          conn.pendingData = null
-          conn.doc.transact(() => {
-            for (const el of (pending.elements || [])) {
-              conn.yMap.set('__el_' + el.id, el)
-            }
-            conn.yMap.set('__appState', pending.appState || {})
-            conn.yMap.set('__files', pending.files || {})
-          }, 'local-scene-change')
+          // Flush pending data
+          if (conn.pendingData) {
+            const pending = conn.pendingData
+            conn.pendingData = null
+            conn.doc.transact(() => {
+              for (const el of (pending.elements || [])) {
+                conn.yMap.set('__el_' + el.id, el)
+              }
+              conn.yMap.set('__appState', pending.appState || {})
+              conn.yMap.set('__files', pending.files || {})
+            }, 'local-scene-change')
+          }
         }
       }
     }
@@ -207,6 +236,14 @@ export function useYjs(roomId, token, options = {}) {
     conn.awarenessListeners.add(handleAwareness)
 
     return () => {
+      // 清除防抖定时器
+      if (statusDebounceRef.current) {
+        clearTimeout(statusDebounceRef.current)
+      }
+      if (syncDebounceRef.current) {
+        clearTimeout(syncDebounceRef.current)
+      }
+
       conn.statusListeners.delete(handleStatus)
       conn.syncListeners.delete(handleSync)
       conn.awarenessListeners.delete(handleAwareness)

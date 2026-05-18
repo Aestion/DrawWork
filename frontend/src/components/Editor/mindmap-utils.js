@@ -41,7 +41,8 @@ export function updateEdgeHandles(nodes, edges) {
       targetHandle = 'target-right'
     }
 
-    return { ...edge, sourceHandle, targetHandle, type: edge.type || 'mindmap' }
+    // 确保所有普通边都设置为 mindmap 类型，即使没有设置 type
+    return { ...edge, sourceHandle, targetHandle, type: 'mindmap' }
   })
 }
 

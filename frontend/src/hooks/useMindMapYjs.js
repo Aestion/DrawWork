@@ -38,7 +38,7 @@ export function edgesToYjs(edges) {
     id: edge.id,
     source: edge.source,
     target: edge.target,
-    type: edge.type || 'smoothstep',
+    type: edge.type || 'mindmap',  // 修正：使用 mindmap 类型而不是 smoothstep
     label: edge.label || ''
   }))
 }
@@ -49,7 +49,7 @@ export function yjsToEdges(yjsEdges) {
     id: e.id,
     source: e.source,
     target: e.target,
-    type: e.type || 'smoothstep',
+    type: e.type || 'mindmap',  // 修正：使用 mindmap 类型而不是 smoothstep
     label: e.label || ''
   }))
 }
@@ -233,47 +233,95 @@ export function useMindMapYjs({ canvasId, roomId, token, canEdit }) {
     }
   }, [yMap, canvasId, canEdit, loading])
 
-  // Primary: Load from Yjs when synced (with localStorage backup for refresh persistence)
+  // Primary: Load from localStorage FIRST, then Yjs, then API
   useEffect(() => {
     if (!yMap || !synced || initialDataLoaded.current) return
 
     const loadData = async () => {
       try {
-        // Check localStorage backup first (restored from beforeunload on page refresh)
+        // === 策略 1: 优先检查 LocalStorage 备份 ===
         const backupKey = 'drawwork_mm_backup_' + canvasId
         const backupJson = localStorage.getItem(backupKey)
         if (backupJson) {
           try {
             const backup = JSON.parse(backupJson)
             if (backup?.nodes?.length > 0) {
-              // Merge backup nodes with any remote nodes from Yjs so B's nodes
-              // aren't lost when A restores from backup on page refresh.
-              const { nodes: yjsNodes, edges: yjsEdges } = extractMindMapData(yMap)
-              const backupIds = new Set(backup.nodes.map(n => n.id))
-              const mergedNodes = [...backup.nodes]
-              for (const node of yjsNodes) {
-                if (!backupIds.has(node.id)) mergedNodes.push(node)
-              }
-              const edgeIds = new Set((backup.edges || []).map(e => e.id))
-              const mergedEdges = [...(backup.edges || [])]
-              for (const edge of yjsEdges) {
-                if (!edgeIds.has(edge.id)) mergedEdges.push(edge)
-              }
-              setNodes(yjsToNodes(mergedNodes, canEdit))
-              setEdges(yjsToEdges(mergedEdges))
-              syncToYjs() // Write merged data to Yjs to correct server state
-              localStorage.removeItem(backupKey)
+              // Load from local backup first (user's last edits before refresh)
+              setNodes(yjsToNodes(backup.nodes, canEdit))
+              setEdges(yjsToEdges(backup.edges))
               initialDataLoaded.current = true
+              setLoading(false)
+
+              // Clear fallback timer since we already loaded
               if (fallbackTimeoutRef.current) {
                 clearTimeout(fallbackTimeoutRef.current)
                 fallbackTimeoutRef.current = null
               }
-              setLoading(false)
+
+              // Sync backup to Yjs in background
+              syncToYjs()
+
+              // Also save backup to API in background
+              const saveBackupToApi = async () => {
+                try {
+                  const currentNodes = backup.nodes
+                  const currentEdges = backup.edges
+
+                  const roots = []
+                  const crossConnections = []
+
+                  const rootNodes = currentNodes.filter(n => !currentEdges.some(e => e.target === n.id && !e.data?.crossConnection))
+
+                  for (const root of rootNodes) {
+                    const buildTree = (nodeId) => {
+                      const node = currentNodes.find(n => n.id === nodeId)
+                      if (!node) return null
+
+                      const childrenEdges = currentEdges.filter(e => e.source === nodeId && !e.data?.crossConnection)
+                      const children = []
+
+                      for (const edge of childrenEdges) {
+                        const child = buildTree(edge.target)
+                        if (child) children.push(child)
+                      }
+
+                      return {
+                        id: node.id,
+                        text: node.text,
+                        media: node.media || [],
+                        position: node.position,
+                        collapsed: node.collapsed || false,
+                        layout: node.layout || 'horizontal',
+                        style: node.style || {},
+                        children
+                      }
+                    }
+                    roots.push(buildTree(root.id))
+                  }
+
+                  const crossEdges = currentEdges.filter(e => e.data?.crossConnection)
+                  crossEdges.forEach(edge => {
+                    crossConnections.push({ id: edge.id, source: edge.source, target: edge.target, label: edge.label || '' })
+                  })
+
+                  if (roots.length > 0) {
+                    await api.put(`/canvases/${canvasId}/mindmap`, { roots, crossConnections, layout: 'vertical' })
+                  }
+                } catch (e) { /* ignore */ }
+              }
+              saveBackupToApi()
+
+              // Keep backup for safety, remove only when confirmed saved
+              setTimeout(() => {
+                try { localStorage.removeItem(backupKey) } catch (e) {}
+              }, 5000)
+
               return
             }
           } catch (e) { /* ignore parse error */ }
         }
 
+        // === 策略 2: 从 Yjs 加载 ===
         const { nodes: yjsNodes, edges: yjsEdges } = extractMindMapData(yMap)
 
         if (yjsNodes.length > 0) {
@@ -381,6 +429,83 @@ export function useMindMapYjs({ canvasId, roomId, token, canEdit }) {
     return () => awareness.off('change', updateStates)
   }, [awareness])
 
+  // Auto-save to HTTP API when data changes (fast debounce)
+  useEffect(() => {
+    if (!canvasId || !canEdit) return
+
+    // Don't auto-save for empty state (default node only)
+    if (nodes.length === 0) return
+    if (nodes.length === 1 && nodes[0].data.label === '中心主题') return
+
+    const autoSaveTimer = setTimeout(() => {
+      const saveToApi = async () => {
+        try {
+          const currentNodes = nodesRef.current
+          const currentEdges = edgesRef.current
+
+          // Convert to roots and cross connections format
+          const roots = []
+          const crossConnections = []
+
+          // Find root nodes
+          const rootNodes = currentNodes.filter(n => !currentEdges.some(e => e.target === n.id && !e.data?.crossConnection))
+
+          for (const root of rootNodes) {
+            const buildTree = (nodeId) => {
+              const node = currentNodes.find(n => n.id === nodeId)
+              if (!node) return null
+
+              const childrenEdges = currentEdges.filter(e => e.source === nodeId && !e.data?.crossConnection)
+              const children = []
+
+              for (const edge of childrenEdges) {
+                const child = buildTree(edge.target)
+                if (child) children.push(child)
+              }
+
+              return {
+                id: node.id,
+                text: node.data.label,
+                media: node.data.media || [],
+                position: node.position,
+                collapsed: node.data.collapsed || false,
+                layout: node.data.layout || 'horizontal',
+                style: node.data.style || {},
+                children
+              }
+            }
+
+            roots.push(buildTree(root.id))
+          }
+
+          // Find cross connections
+          const crossEdges = currentEdges.filter(e => e.data?.crossConnection)
+          crossEdges.forEach(edge => {
+            crossConnections.push({
+              id: edge.id,
+              source: edge.source,
+              target: edge.target,
+              label: edge.label || ''
+            })
+          })
+
+          await api.put(`/canvases/${canvasId}/mindmap`, {
+            roots,
+            crossConnections,
+            layout: 'vertical'
+          })
+          // console.log('[useMindMapYjs] Auto-save to API succeeded')
+        } catch (err) {
+          console.error('[useMindMapYjs] Auto-save to API failed:', err.message)
+        }
+      }
+
+      saveToApi()
+    }, 500)  // 500ms 快速保存
+
+    return () => clearTimeout(autoSaveTimer)
+  }, [nodes, edges, canvasId, canEdit])
+
   // LocalStorage backup for persistence on page refresh
   useEffect(() => {
     if (!canvasId) return
@@ -464,7 +589,7 @@ function convertRootsToFlowData(roots, crossConnections, canEdit) {
         id: `edge-${parentId}-${id}`,
         source: parentId,
         target: id,
-        type: 'smoothstep'
+        type: 'mindmap'  // 修正：使用 mindmap 类型而不是 smoothstep
       })
     }
 
