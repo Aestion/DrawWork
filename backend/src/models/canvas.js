@@ -19,7 +19,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING(20),
       defaultValue: 'excalidraw',
       validate: {
-        isIn: [['excalidraw', 'mindmap', 'kanban', 'swimlane']]
+        isIn: [['excalidraw', 'mindmap', 'jsmind', 'markmap', 'simplemindmap', 'mindelixir', 'kanban', 'swimlane']]
       }
     },
     sort_order: {

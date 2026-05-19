@@ -5,6 +5,10 @@ import { useBoardStore } from '../stores/boardStore'
 import { useCanvasStore } from '../stores/canvasStore'
 import CanvasSidebar from '../components/Editor/CanvasSidebar'
 const ExcalidrawWrapper = lazy(() => import('../components/Editor/ExcalidrawWrapper'))
+const JsMindEditor = lazy(() => import('../components/Editor/JsMindEditor'))
+const MarkmapEditor = lazy(() => import('../components/Editor/MarkmapEditor'))
+const SimpleMindMapEditor = lazy(() => import('../components/Editor/SimpleMindMapEditor'))
+const MindElixirEditor = lazy(() => import('../components/Editor/MindElixirEditor'))
 import MindMapEditor from '../components/Editor/MindMapEditor'
 import KanbanEditor from '../components/Editor/KanbanEditor'
 import SwimlaneEditor from '../components/Editor/SwimlaneEditor'
@@ -75,6 +79,10 @@ export default function EditorPage() {
   // Version restore
   const mindMapRef = useRef(null)
   const excalidrawRef = useRef(null)
+  const jsMindRef = useRef(null)
+  const markmapRef = useRef(null)
+  const simpleMindMapRef = useRef(null)
+  const mindElixirRef = useRef(null)
   const [snapshotSaving, setSnapshotSaving] = useState(false)
 
   const saveSnapshot = async () => {
@@ -328,6 +336,59 @@ export default function EditorPage() {
                         <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载编辑器...</div>}>
                           <ExcalidrawWrapper
                             ref={excalidrawRef}
+                            canvasId={canvas.id}
+                            roomId={canvas.yjs_room_id}
+                            canEdit={canEdit}
+                            boardId={boardId}
+                            onConnectionChange={handleConnectionChange}
+                            isActive={isActive}
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
+                    ) : canvas.type === 'jsmind' ? (
+                      <ErrorBoundary>
+                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载 jsMind...</div>}>
+                          <JsMindEditor
+                            ref={jsMindRef}
+                            canvasId={canvas.id}
+                            roomId={canvas.yjs_room_id}
+                            canEdit={canEdit}
+                            boardId={boardId}
+                            onConnectionChange={handleConnectionChange}
+                            isActive={isActive}
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
+                    ) : canvas.type === 'markmap' ? (
+                      <ErrorBoundary>
+                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载 Markmap...</div>}>
+                          <MarkmapEditor
+                            canvasId={canvas.id}
+                            roomId={canvas.yjs_room_id}
+                            canEdit={canEdit}
+                            boardId={boardId}
+                            onConnectionChange={handleConnectionChange}
+                            isActive={isActive}
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
+                    ) : canvas.type === 'simplemindmap' ? (
+                      <ErrorBoundary>
+                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载 Mind-Map...</div>}>
+                          <SimpleMindMapEditor
+                            canvasId={canvas.id}
+                            roomId={canvas.yjs_room_id}
+                            canEdit={canEdit}
+                            boardId={boardId}
+                            onConnectionChange={handleConnectionChange}
+                            isActive={isActive}
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
+                    ) : canvas.type === 'mindelixir' ? (
+                      <ErrorBoundary>
+                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载 Mind Elixir...</div>}>
+                          <MindElixirEditor
                             canvasId={canvas.id}
                             roomId={canvas.yjs_room_id}
                             canEdit={canEdit}

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  getRectilinearPath,
   updateEdgeHandles,
   calculateMultiTreeLayout,
+  moveNode,
   serializeSubtree,
   deserializeSubtree,
   applyLayoutWithOffsets,
@@ -12,6 +14,84 @@ import {
   TREE_VERTICAL_SPACING,
   MIN_NODE_HEIGHT
 } from './mindmap-utils'
+
+// ============================================================
+// getRectilinearPath
+// ============================================================
+describe('getRectilinearPath', () => {
+  it('returns SVG path with H and V segments for horizontal-dominant case', () => {
+    const result = getRectilinearPath({ sourceX: 100, sourceY: 200, targetX: 400, targetY: 250 })
+    expect(result).toMatch(/^M /)
+    expect(result).toContain(' H ')
+    expect(result).toContain(' V ')
+    expect(result).toMatch(/H 400$/)  // ends at targetX
+  })
+
+  it('produces the same bendX for all sibling edges sharing the same sourceX', () => {
+    const parentEdge = { sourceX: 200, sourceY: 200 }
+    const children = [
+      { targetX: 400, targetY: 150 },
+      { targetX: 420, targetY: 200 },
+      { targetX: 410, targetY: 250 },
+    ]
+    const paths = children.map(c => getRectilinearPath({ ...parentEdge, ...c }))
+    const bendXs = paths.map(p => {
+      const match = p.match(/H ([\d.]+)/)
+      return match ? parseFloat(match[1]) : null
+    })
+    // All siblings should share the same bendX
+    expect(new Set(bendXs).size).toBe(1)
+  })
+
+  it('clamps bendX when target is too close to prevent backward segments', () => {
+    // Horizontal-dominant: |110-100|=10 > |105-100|=5
+    // BEND_OFFSET=60 would overshoot targetX=110, should clamp to 105
+    const result = getRectilinearPath({ sourceX: 100, sourceY: 100, targetX: 110, targetY: 105 })
+    const match = result.match(/H ([\d.]+)/)
+    const bendX = match ? parseFloat(match[1]) : null
+    // Should clamp to at most targetX - 5 = 105
+    expect(bendX).toBe(105)
+  })
+
+  it('uses bend offset to the left for left-going connections', () => {
+    const result = getRectilinearPath({ sourceX: 300, sourceY: 200, targetX: 100, targetY: 250 })
+    const match = result.match(/H ([\d.]+)/)
+    const bendX = match ? parseFloat(match[1]) : null
+    // Should bend to the left of source: 300 - 60 = 240
+    expect(bendX).toBe(240)
+    expect(result).toMatch(/H 100$/)  // ends at targetX
+  })
+
+  it('returns SVG path for vertical-dominant case', () => {
+    const result = getRectilinearPath({ sourceX: 200, sourceY: 100, targetX: 250, targetY: 400 })
+    expect(result).toMatch(/^M /)
+    expect(result).toContain(' V ')
+    expect(result).toContain(' H ')
+    expect(result).toMatch(/V 400$/)  // ends at targetY
+  })
+
+  it('uses same bendY for sibling edges in vertical layout', () => {
+    const parentEdge = { sourceY: 100, sourceX: 200 }
+    const children = [
+      { targetY: 350, targetX: 150 },
+      { targetY: 360, targetX: 250 },
+      { targetY: 370, targetX: 200 },
+    ]
+    const paths = children.map(c => getRectilinearPath({ ...parentEdge, ...c }))
+    const bendYs = paths.map(p => {
+      const match = p.match(/V ([\d.]+)/)
+      return match ? parseFloat(match[1]) : null
+    })
+    // The first bendY is the uniform one (before H segment)
+    const firstBendYs = bendYs.map((_, i) => {
+      // For vertical-dominant: M sx sy V bendY H tx V ty
+      const parts = paths[i].split(' ')
+      const vyIndex = parts.findIndex(s => s === 'V')  // first V
+      return parts[vyIndex + 1] ? parseFloat(parts[vyIndex + 1]) : null
+    })
+    expect(new Set(firstBendYs).size).toBe(1)
+  })
+})
 
 // ============================================================
 // updateEdgeHandles
@@ -564,6 +644,117 @@ describe('importFromMarkdown', () => {
     const roots = importFromMarkdown('')
     expect(roots).toHaveLength(1)
     expect(roots[0].text).toBe('中心主题')
+  })
+})
+
+// ============================================================
+// moveNode
+// ============================================================
+describe('moveNode', () => {
+  const makeNode = (id, label = id, extra = {}) => ({
+    id, type: 'mindNode', position: { x: 0, y: 0 },
+    data: { label, side: null, depth: 0, ...extra }
+  })
+  const makeEdge = (id, source, target) => ({ id, source, target, type: 'mindmap' })
+
+  it('moves node as child of target', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')]
+    const edges = [makeEdge('e1', 'a', 'b')]
+    // Tree: a → b, c (root). Move b as child of c.
+    const result = moveNode(nodes, edges, 'b', 'c', 'asChild')
+    expect(result).not.toBeNull()
+    // b's old incoming edge should be removed
+    expect(result.edges.find(e => e.target === 'b' && e.source === 'a')).toBeUndefined()
+    // New edge from c to b should exist
+    expect(result.edges.find(e => e.source === 'c' && e.target === 'b')).toBeDefined()
+    // a should now be a root (no incoming edges)
+    expect(result.edges.find(e => e.target === 'a')).toBeUndefined()
+  })
+
+  it('moves node before target (sibling)', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')]
+    const edges = [makeEdge('e1', 'a', 'b'), makeEdge('e2', 'a', 'c')]
+    // Tree: a → b, a → c (both children of a). Move b before c (same parent).
+    const result = moveNode(nodes, edges, 'b', 'c', 'before')
+    expect(result).not.toBeNull()
+    // b should still have a as parent
+    expect(result.edges.find(e => e.source === 'a' && e.target === 'b')).toBeDefined()
+    // c should still have a as parent (unchanged)
+    expect(result.edges.find(e => e.source === 'a' && e.target === 'c')).toBeDefined()
+  })
+
+  it('moves node after target (sibling) to a different parent', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c'), makeNode('d')]
+    const edges = [makeEdge('e1', 'a', 'b'), makeEdge('e2', 'c', 'd')]
+    // Trees: a → b, c → d. Move b after d → b becomes sibling of d under c.
+    const result = moveNode(nodes, edges, 'b', 'd', 'after')
+    expect(result).not.toBeNull()
+    // b's old parent edge should be removed
+    expect(result.edges.find(e => e.target === 'b' && e.source === 'a')).toBeUndefined()
+    // b should now be under c (same parent as d)
+    expect(result.edges.find(e => e.source === 'c' && e.target === 'b')).toBeDefined()
+  })
+
+  it('makes node a root when moving before/after a root target', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')]
+    const edges = [makeEdge('e1', 'a', 'b')]
+    // Tree: a (root), a → b, c (root). Move b before c (c is root, has no parent).
+    const result = moveNode(nodes, edges, 'b', 'c', 'before')
+    expect(result).not.toBeNull()
+    // b's parent edge should be removed (b becomes a root)
+    expect(result.edges.find(e => e.target === 'b')).toBeUndefined()
+    // c (root target) should still have no incoming edge
+    expect(result.edges.find(e => e.target === 'c')).toBeUndefined()
+  })
+
+  it('returns null when moving node to itself', () => {
+    const nodes = [makeNode('a'), makeNode('b')]
+    const edges = [makeEdge('e1', 'a', 'b')]
+    const result = moveNode(nodes, edges, 'b', 'b', 'asChild')
+    expect(result).toBeNull()
+  })
+
+  it('returns null when creating a circular dependency (moving ancestor into descendant)', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')]
+    const edges = [makeEdge('e1', 'a', 'b'), makeEdge('e2', 'b', 'c')]
+    // Tree: a → b → c. Moving a as child of c would create a cycle.
+    const result = moveNode(nodes, edges, 'a', 'c', 'asChild')
+    expect(result).toBeNull()
+  })
+
+  it('moves root node as child of another root', () => {
+    const nodes = [makeNode('a'), makeNode('b')]
+    const edges = []
+    // Both a and b are roots. Move a as child of b.
+    const result = moveNode(nodes, edges, 'a', 'b', 'asChild')
+    expect(result).not.toBeNull()
+    expect(result.edges.find(e => e.source === 'b' && e.target === 'a')).toBeDefined()
+  })
+
+  it('moves subtree with children intact', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c'), makeNode('d')]
+    const edges = [makeEdge('e1', 'a', 'b'), makeEdge('e2', 'b', 'c'), makeEdge('e3', 'd')]
+    // Trees: a → b → c, d (root). Move subtree b (with child c) under d.
+    const result = moveNode(nodes, edges, 'b', 'd', 'asChild')
+    expect(result).not.toBeNull()
+    // b should now be under d
+    expect(result.edges.find(e => e.source === 'd' && e.target === 'b')).toBeDefined()
+    // b's old parent edge removed
+    expect(result.edges.find(e => e.source === 'a' && e.target === 'b')).toBeUndefined()
+    // c should still be under b (subtree intact)
+    expect(result.edges.find(e => e.source === 'b' && e.target === 'c')).toBeDefined()
+  })
+
+  it('preserves cross-connection edges during move', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')]
+    const edges = [
+      makeEdge('e1', 'a', 'b'),
+      { id: 'cross1', source: 'b', target: 'c', type: 'crossConnection', data: { crossConnection: true } }
+    ]
+    const result = moveNode(nodes, edges, 'b', 'c', 'asChild')
+    expect(result).not.toBeNull()
+    // Cross-connection should be preserved
+    expect(result.edges.find(e => e.id === 'cross1')).toBeDefined()
   })
 })
 

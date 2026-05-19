@@ -128,7 +128,10 @@
       "Bash(tasklist)",
       "Bash(findstr yjs *)",
       "Bash(findstr -i \"yjs\\\\|ws-server\\\\|3001\")",
-      "Bash(findstr -v findstr)"
+      "Bash(findstr -v findstr)",
+      "Bash(git stash *)",
+      "Skill(webapp-testing)",
+      "Skill(webapp-testing:*)"
     ],
     "additionalDirectories": [
       "\\"

@@ -13,6 +13,25 @@ export function estimateNodeDimensions(label = '') {
 }
 
 // ============================================================
+// Rectilinear (elbow) edge path
+// ============================================================
+export function getRectilinearPath({ sourceX, sourceY, targetX, targetY }) {
+  const BEND_OFFSET = 60
+
+  // Horizontal-dominant: H-bend (horizontal then vertical then horizontal)
+  if (Math.abs(targetX - sourceX) > Math.abs(targetY - sourceY)) {
+    const bendX = sourceX + (targetX > sourceX ? BEND_OFFSET : -BEND_OFFSET)
+    const clampedX = Math.min(Math.max(bendX, Math.min(sourceX, targetX) + 5), Math.max(sourceX, targetX) - 5)
+    return `M ${sourceX} ${sourceY} H ${clampedX} V ${targetY} H ${targetX}`
+  } else {
+    // Vertical-dominant: V-bend (vertical then horizontal then vertical)
+    const bendY = sourceY + (targetY > sourceY ? BEND_OFFSET : -BEND_OFFSET)
+    const clampedY = Math.min(Math.max(bendY, Math.min(sourceY, targetY) + 5), Math.max(sourceY, targetY) - 5)
+    return `M ${sourceX} ${sourceY} V ${clampedY} H ${targetX} V ${targetY}`
+  }
+}
+
+// ============================================================
 // Edge handles
 // ============================================================
 export function updateEdgeHandles(nodes, edges) {
@@ -265,6 +284,87 @@ function layoutHorizontalSubtree(nodeMap, childrenMap, rootId, offsetY) {
   const rootHeight = calcSubtreeHeight(rootId)
   layoutNode(rootId, 0, offsetY + rootHeight / 2, 'center', 0)
   return rootHeight
+}
+
+// ============================================================
+// Move node (for drag-and-drop rearrangement)
+// ============================================================
+
+/**
+ * Move a node (and its subtree) to a new position relative to a target node.
+ * Returns updated edges array with the new parent-child relationship.
+ * Returns null if the move is invalid (self-move, circular dependency).
+ *
+ * @param {Array} nodes - Flat node array
+ * @param {Array} edges - Flat edge array
+ * @param {string} sourceId - ID of node to move
+ * @param {string} targetId - ID of target node
+ * @param {'before'|'after'|'asChild'} position - Where to place source relative to target
+ * @returns {{nodes: Array, edges: Array}|null}
+ */
+export function moveNode(nodes, edges, sourceId, targetId, position) {
+  if (sourceId === targetId) return null
+
+  // Prevent circular: check if target is a descendant of source
+  function isDescendant(nodeId, potentialAncestorId, visited = new Set()) {
+    if (nodeId === potentialAncestorId) return true
+    if (visited.has(nodeId)) return false
+    visited.add(nodeId)
+    const parentEdge = edges.find(
+      e => e.target === nodeId && !e.data?.crossConnection && e.type !== 'crossConnection'
+    )
+    if (!parentEdge) return false
+    return isDescendant(parentEdge.source, potentialAncestorId, visited)
+  }
+  // Only need to check for circular when moving as child (creating new parent-child edge)
+  if (position === 'asChild' && isDescendant(targetId, sourceId)) return null
+
+  // If source is being moved as sibling of target and target has no parent (target is root),
+  // then source becomes a root too — just remove its parent edge.
+  if (position !== 'asChild') {
+    const targetParentEdge = edges.find(
+      e => e.target === targetId && !e.data?.crossConnection && e.type !== 'crossConnection'
+    )
+    if (!targetParentEdge) {
+      // Target is a root — remove source's parent if any, source becomes a root too
+      const newEdges = edges.filter(e => {
+        if (e.target === sourceId && !e.data?.crossConnection && e.type !== 'crossConnection') return false
+        return true
+      })
+      return { nodes, edges: newEdges }
+    }
+  }
+
+  // Build new edges: remove source's incoming edge, add new edge based on position
+  const newEdges = edges.filter(e => {
+    if (e.target === sourceId && !e.data?.crossConnection && e.type !== 'crossConnection') return false
+    return true
+  })
+
+  if (position === 'asChild') {
+    // Source becomes child of target
+    newEdges.push({
+      id: `edge-${targetId}-${sourceId}-${Date.now()}`,
+      source: targetId,
+      target: sourceId,
+      type: 'mindmap'
+    })
+  } else {
+    // Source becomes sibling of target — find target's parent and use same parent
+    const targetParentEdge = edges.find(
+      e => e.target === targetId && !e.data?.crossConnection && e.type !== 'crossConnection'
+    )
+    if (targetParentEdge) {
+      newEdges.push({
+        id: `edge-${targetParentEdge.source}-${sourceId}-${Date.now()}`,
+        source: targetParentEdge.source,
+        target: sourceId,
+        type: 'mindmap'
+      })
+    }
+  }
+
+  return { nodes, edges: newEdges }
 }
 
 // ============================================================

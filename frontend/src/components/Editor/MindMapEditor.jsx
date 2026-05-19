@@ -19,8 +19,10 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
+  getRectilinearPath,
   updateEdgeHandles,
   calculateMultiTreeLayout,
+  moveNode,
   applyLayoutWithOffsets,
   serializeSubtree,
   deserializeSubtree,
@@ -190,26 +192,6 @@ function MindMapEdge({ id, source, target, sourceX, sourceY, targetX, targetY, s
   )
 }
 
-// 直线转角路径算法
-function getRectilinearPath({ sourceX, sourceY, targetX, targetY }) {
-  // Spread the bend point proportionally to the perpendicular distance,
-  // so sibling paths fan out instead of overlapping. Clamped to stay
-  // between source and target to prevent backward segments.
-  const SPREAD = 0.6
-
-  if (Math.abs(targetX - sourceX) > Math.abs(targetY - sourceY)) {
-    const midX = (sourceX + targetX) / 2
-    const bendX = midX + (targetY - sourceY) * SPREAD
-    const clampedX = Math.min(Math.max(bendX, Math.min(sourceX, targetX) + 5), Math.max(sourceX, targetX) - 5)
-    return `M ${sourceX} ${sourceY} H ${clampedX} V ${targetY} H ${targetX}`
-  } else {
-    const midY = (sourceY + targetY) / 2
-    const bendY = midY + (targetX - sourceX) * SPREAD
-    const clampedY = Math.min(Math.max(bendY, Math.min(sourceY, targetY) + 5), Math.max(sourceY, targetY) - 5)
-    return `M ${sourceX} ${sourceY} V ${clampedY} H ${targetX} V ${targetY}`
-  }
-}
-
 // Media item component
 function MediaItemView({ item, onDelete, canEdit }) {
   const [url, setUrl] = useState(null)
@@ -270,6 +252,10 @@ function MindNode({ id, data, selected }) {
   // 视觉反馈：检查当前节点是否是拖动目标
   const dragTargetNode = useContext(MindMapActionsContext)?.dragTargetNode
   const isDragTarget = dragTargetNode?.id === id
+  const dragInsertPosition = useContext(MindMapActionsContext)?.dragInsertPosition
+  const isDragBefore = isDragTarget && dragInsertPosition === 'before'
+  const isDragAfter = isDragTarget && dragInsertPosition === 'after'
+  const isDragAsChild = isDragTarget && dragInsertPosition === 'asChild'
 
   const mindMapActions = useContext(MindMapActionsContext)
   const isRoot = mindMapActions?.rootIds?.has(id) || false
@@ -360,13 +346,17 @@ function MindNode({ id, data, selected }) {
       className={`relative rounded-lg border-2 transition-all ${
         isSelected
           ? 'border-blue-500 bg-blue-50 shadow-lg'
-          : isDragTarget
-            ? 'border-green-500 bg-green-50 shadow-lg ring-2 ring-green-500 ring-offset-2'
-            : data.depth === 0
-              ? 'border-amber-400 bg-amber-50 hover:border-amber-500 font-bold'
-              : data.depth === 1
-                ? 'border-sky-400 bg-sky-50 hover:border-sky-500 font-medium'
-                : 'border-gray-300 bg-white hover:border-gray-400'
+          : isDragBefore
+            ? 'border-blue-400 bg-blue-50/50 shadow-lg'
+            : isDragAfter
+              ? 'border-blue-400 bg-blue-50/50 shadow-lg'
+              : isDragAsChild
+                ? 'border-green-500 bg-green-50 shadow-lg ring-2 ring-green-500 ring-offset-2'
+                : data.depth === 0
+                  ? 'border-amber-400 bg-amber-50 hover:border-amber-500 font-bold'
+                  : data.depth === 1
+                    ? 'border-sky-400 bg-sky-50 hover:border-sky-500 font-medium'
+                    : 'border-gray-300 bg-white hover:border-gray-400'
       } ${isCurrentMatch ? '!ring-2 !ring-blue-500 !ring-offset-2' : ''}`}
       style={{
         ...(data.style?.bgColor ? { backgroundColor: data.style.bgColor } : {}),
@@ -441,6 +431,14 @@ function MindNode({ id, data, selected }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* 拖拽插入位置指示器 */}
+      {isDragBefore && (
+        <div className="absolute -top-[3px] left-2 right-2 h-[3px] bg-blue-500 rounded-full shadow-sm" />
+      )}
+      {isDragAfter && (
+        <div className="absolute -bottom-[3px] left-2 right-2 h-[3px] bg-blue-500 rounded-full shadow-sm" />
       )}
 
     </div>
@@ -673,6 +671,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
   // 视觉反馈状态
   const [dragTargetNode, setDragTargetNode] = useState(null)
   const [dragDistance, setDragDistance] = useState(null)
+  const [dragInsertPosition, setDragInsertPosition] = useState(null)
 
   // Cross-connection state
   const [pendingCrossSource, setPendingCrossSource] = useState(null)
@@ -859,6 +858,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
     dragStartPosRef.current = { id: node.id, x: node.position.x, y: node.position.y }
     setDragTargetNode(null)
     setDragDistance(null)
+    setDragInsertPosition(null)
   }, [])
 
   const onNodeDrag = useCallback((event, node) => {
@@ -942,6 +942,23 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
 
       setDragTargetNode(targetNode)
       setDragDistance(targetNode ? (1 - maxOverlap) : null)
+
+      // 检测拖拽位置区域: before (上方), asChild (中央), after (下方)
+      if (targetNode && isRoot === false) {
+        const NODE_HEIGHT = 50
+        const ZONE_THRESHOLD = 0.25
+        const relativeY = node.position.y - targetNode.position.y
+        const zonePixels = NODE_HEIGHT * ZONE_THRESHOLD
+        if (relativeY < -zonePixels) {
+          setDragInsertPosition('before')
+        } else if (relativeY > zonePixels) {
+          setDragInsertPosition('after')
+        } else {
+          setDragInsertPosition('asChild')
+        }
+      } else {
+        setDragInsertPosition(null)
+      }
     }
   }, [canEdit])
 
@@ -957,6 +974,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
     // 清除视觉反馈
     setDragTargetNode(null)
     setDragDistance(null)
+    setDragInsertPosition(null)
 
     // Ignore tiny movements (clicks, not drags)
     if (Math.abs(node.position.x - start.x) < 5 && Math.abs(node.position.y - start.y) < 5) return
@@ -1108,77 +1126,141 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
       if (targetNode) {
         captureUndoRef.current()
         const targetId = targetNode.id
-        const savedLayouts = new Map(nodesRef.current.filter(n => !edgesRef.current.some(e => e.target === n.id)).map(n => [n.id, n.data?.layout]))
-        const getLayoutForRoot = (rootId) => savedLayouts.get(rootId) || 'horizontal'
 
-        // Create new edge (source = target parent)
-        const newEdgeId = `edge-${targetId}-${node.id}`
-        const newEdge = { id: newEdgeId, source: targetId, target: node.id, type: 'mindmap' }
-
-        // Build edges: replace old edge with new edge, ordered by Y for insert position
-        const oldEdgeId = edgesRef.current.find(
-          e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
-        )?.id
-        const edgesWithoutNew = edgesRef.current.filter(e => e.id !== oldEdgeId && e.id !== newEdgeId)
-        const siblingEdgeData = edgesWithoutNew
-          .filter(e => e.source === targetId && !e.data?.crossConnection && e.type !== 'crossConnection')
-          .map(e => ({
-            edge: e,
-            y: nodesRef.current.find(n => n.id === e.target)?.position?.y || 0
-          })).sort((a, b) => a.y - b.y)
-        let insertIdx = siblingEdgeData.length
-        for (let i = 0; i < siblingEdgeData.length; i++) {
-          if (node.position.y < siblingEdgeData[i].y) { insertIdx = i; break }
+        // 判断插入位置: before (上方), after (下方), asChild (中央)
+        const ZONE_THRESHOLD = 0.25
+        const relativeY = node.position.y - targetNode.position.y
+        const zonePixels = NODE_HEIGHT * ZONE_THRESHOLD
+        let dropPosition
+        if (relativeY < -zonePixels) {
+          dropPosition = 'before'
+        } else if (relativeY > zonePixels) {
+          dropPosition = 'after'
+        } else {
+          dropPosition = 'asChild'
         }
-        const nonSiblingEdges = edgesWithoutNew.filter(
-          e => !(e.source === targetId && !e.data?.crossConnection && e.type !== 'crossConnection')
-        )
-        const siblingEdges = siblingEdgeData.map(d => d.edge)
-        siblingEdges.splice(insertIdx, 0, newEdge)
-        const newEdges = [...nonSiblingEdges, ...siblingEdges]
 
-        // Compute full layout from scratch with new tree structure
-        const result = calculateMultiTreeLayout(nodesRef.current, newEdges, getLayoutForRoot)
-        const layoutPositions = new Map(result.nodes.map(n => [n.id, n.position]))
+        if (dropPosition === 'before' || dropPosition === 'after') {
+          // 使用 moveNode 进行兄弟节点插入 (before/after)
+          const moveResult = moveNode(nodesRef.current, edgesRef.current, node.id, targetId, dropPosition)
+          if (moveResult) {
+            const savedLayouts = new Map(nodesRef.current.filter(n => !edgesRef.current.some(e => e.target === n.id)).map(n => [n.id, n.data?.layout]))
+            const getLayoutForRoot = (rootId) => savedLayouts.get(rootId) || 'horizontal'
+            const layoutResult = calculateMultiTreeLayout(moveResult.nodes, moveResult.edges, getLayoutForRoot)
+            const layoutPositions = new Map(layoutResult.nodes.map(n => [n.id, n.position]))
 
-        // Helper: find the root ancestor of a node in the new edge structure
-        const findRoot = (nodeId) => {
-          let current = nodeId
-          while (true) {
-            const parentEdge = newEdges.find(e => e.target === current && !e.data?.crossConnection && e.type !== 'crossConnection')
-            if (!parentEdge) return current
-            current = parentEdge.source
+            // Helper: find the root ancestor of a node
+            const findRoot = (nodeId) => {
+              let current = nodeId
+              while (true) {
+                const parentEdge = moveResult.edges.find(e => e.target === current && !e.data?.crossConnection && e.type !== 'crossConnection')
+                if (!parentEdge) return current
+                current = parentEdge.source
+              }
+            }
+
+            // Identify affected roots
+            const oldParentEdge = edgesRef.current.find(
+              e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
+            )
+            const newParentRoot = findRoot(targetId)
+            const oldParentRoot = oldParentEdge ? findRoot(oldParentEdge.source) : null
+            const affectedRoots = new Set([newParentRoot])
+            if (oldParentRoot) affectedRoots.add(oldParentRoot)
+
+            layoutResult.nodes = layoutResult.nodes.map(n => {
+              const nodeRoot = findRoot(n.id)
+              if (affectedRoots.has(nodeRoot)) {
+                const rootLayoutPos = layoutPositions.get(nodeRoot)
+                const rootActualPos = nodesRef.current.find(p => p.id === nodeRoot)?.position
+                if (rootLayoutPos && rootActualPos) {
+                  const dx = rootActualPos.x - rootLayoutPos.x
+                  const dy = rootActualPos.y - rootLayoutPos.y
+                  return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+                }
+              }
+              const actual = nodesRef.current.find(p => p.id === n.id)
+              if (actual) return { ...n, position: { ...actual.position } }
+              return n
+            })
+            setNodes(layoutResult.nodes)
+            setEdges(layoutResult.edges)
+            return
           }
-        }
+        } else {
+          // asChild: 将节点作为 target 的子节点 (现有逻辑)
+          const savedLayouts = new Map(nodesRef.current.filter(n => !edgesRef.current.some(e => e.target === n.id)).map(n => [n.id, n.data?.layout]))
+          const getLayoutForRoot = (rootId) => savedLayouts.get(rootId) || 'horizontal'
 
-        // Identify affected roots: old parent's root and new parent's root
-        const oldParentEdge = edgesRef.current.find(
-          e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
-        )
-        const newParentRoot = findRoot(targetId)
-        const oldParentRoot = oldParentEdge ? findRoot(oldParentEdge.source) : null
-        const affectedRoots = new Set([newParentRoot])
-        if (oldParentRoot) affectedRoots.add(oldParentRoot)
+          // Create new edge (source = target)
+          const newEdgeId = `edge-${targetId}-${node.id}`
+          const newEdge = { id: newEdgeId, source: targetId, target: node.id, type: 'mindmap' }
 
-        // For each node: if its root is affected → translate layout pos; else → preserve actual pos
-        result.nodes = result.nodes.map(n => {
-          const nodeRoot = findRoot(n.id)
-          if (affectedRoots.has(nodeRoot)) {
-            const rootLayoutPos = layoutPositions.get(nodeRoot)
-            const rootActualPos = nodesRef.current.find(p => p.id === nodeRoot)?.position
-            if (rootLayoutPos && rootActualPos) {
-              const dx = rootActualPos.x - rootLayoutPos.x
-              const dy = rootActualPos.y - rootLayoutPos.y
-              return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+          // Build edges: replace old edge with new edge, ordered by Y for insert position
+          const oldEdgeId = edgesRef.current.find(
+            e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
+          )?.id
+          const edgesWithoutNew = edgesRef.current.filter(e => e.id !== oldEdgeId && e.id !== newEdgeId)
+          const siblingEdgeData = edgesWithoutNew
+            .filter(e => e.source === targetId && !e.data?.crossConnection && e.type !== 'crossConnection')
+            .map(e => ({
+              edge: e,
+              y: nodesRef.current.find(n => n.id === e.target)?.position?.y || 0
+            })).sort((a, b) => a.y - b.y)
+          let insertIdx = siblingEdgeData.length
+          for (let i = 0; i < siblingEdgeData.length; i++) {
+            if (node.position.y < siblingEdgeData[i].y) { insertIdx = i; break }
+          }
+          const nonSiblingEdges = edgesWithoutNew.filter(
+            e => !(e.source === targetId && !e.data?.crossConnection && e.type !== 'crossConnection')
+          )
+          const siblingEdges = siblingEdgeData.map(d => d.edge)
+          siblingEdges.splice(insertIdx, 0, newEdge)
+          const newEdges = [...nonSiblingEdges, ...siblingEdges]
+
+          // Compute full layout from scratch with new tree structure
+          const result = calculateMultiTreeLayout(nodesRef.current, newEdges, getLayoutForRoot)
+          const layoutPositions = new Map(result.nodes.map(n => [n.id, n.position]))
+
+          // Helper: find the root ancestor of a node in the new edge structure
+          const findRoot = (nodeId) => {
+            let current = nodeId
+            while (true) {
+              const parentEdge = newEdges.find(e => e.target === current && !e.data?.crossConnection && e.type !== 'crossConnection')
+              if (!parentEdge) return current
+              current = parentEdge.source
             }
           }
-          const actual = nodesRef.current.find(p => p.id === n.id)
-          if (actual) return { ...n, position: { ...actual.position } }
-          return n
-        })
-        setNodes(result.nodes)
-        setEdges(result.edges)
-        return
+
+          // Identify affected roots: old parent's root and new parent's root
+          const oldParentEdge = edgesRef.current.find(
+            e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
+          )
+          const newParentRoot = findRoot(targetId)
+          const oldParentRoot = oldParentEdge ? findRoot(oldParentEdge.source) : null
+          const affectedRoots = new Set([newParentRoot])
+          if (oldParentRoot) affectedRoots.add(oldParentRoot)
+
+          // For each node: if its root is affected → translate layout pos; else → preserve actual pos
+          result.nodes = result.nodes.map(n => {
+            const nodeRoot = findRoot(n.id)
+            if (affectedRoots.has(nodeRoot)) {
+              const rootLayoutPos = layoutPositions.get(nodeRoot)
+              const rootActualPos = nodesRef.current.find(p => p.id === nodeRoot)?.position
+              if (rootLayoutPos && rootActualPos) {
+                const dx = rootActualPos.x - rootLayoutPos.x
+                const dy = rootActualPos.y - rootLayoutPos.y
+                return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+              }
+            }
+            const actual = nodesRef.current.find(p => p.id === n.id)
+            if (actual) return { ...n, position: { ...actual.position } }
+            return n
+          })
+          setNodes(result.nodes)
+          setEdges(result.edges)
+          return
+        }
       }
     }
 
@@ -2155,8 +2237,9 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
   const mindMapActions = useMemo(() => ({
     toggleLayout: toggleRootLayout,
     rootIds,
-    dragTargetNode
-  }), [toggleRootLayout, rootIds, dragTargetNode])
+    dragTargetNode,
+    dragInsertPosition
+  }), [toggleRootLayout, rootIds, dragTargetNode, dragInsertPosition])
 
   if (yjsLoading) {
     return (
@@ -2432,7 +2515,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
             edgeTypes={edgeTypes}
             nodeOrigin={[0.5, 0.5]}
             attributionPosition="bottom-left"
-            nodesDraggable={false}
+            nodesDraggable={canEdit}
             nodesConnectable={canEdit}
             elementsSelectable={true}
             deleteKeyCode={null}
