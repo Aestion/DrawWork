@@ -9,6 +9,7 @@ const JsMindEditor = lazy(() => import('../components/Editor/JsMindEditor'))
 const MarkmapEditor = lazy(() => import('../components/Editor/MarkmapEditor'))
 const SimpleMindMapEditor = lazy(() => import('../components/Editor/SimpleMindMapEditor'))
 const MindElixirEditor = lazy(() => import('../components/Editor/MindElixirEditor'))
+const TencentMindEditor = lazy(() => import('../components/Editor/TencentMindEditor'))
 import MindMapEditor from '../components/Editor/MindMapEditor'
 import KanbanEditor from '../components/Editor/KanbanEditor'
 import SwimlaneEditor from '../components/Editor/SwimlaneEditor'
@@ -83,6 +84,7 @@ export default function EditorPage() {
   const markmapRef = useRef(null)
   const simpleMindMapRef = useRef(null)
   const mindElixirRef = useRef(null)
+  const tencentMindRef = useRef(null)
   const [snapshotSaving, setSnapshotSaving] = useState(false)
 
   const saveSnapshot = async () => {
@@ -426,6 +428,19 @@ export default function EditorPage() {
                         onConnectionChange={handleConnectionChange}
                         isActive={isActive}
                       />
+                    ) : canvas.type === 'tencentmind' ? (
+                      <ErrorBoundary>
+                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载腾讯思维...</div>}>
+                          <TencentMindEditor
+                            canvasId={canvas.id}
+                            roomId={canvas.yjs_room_id}
+                            canEdit={canEdit}
+                            boardId={boardId}
+                            onConnectionChange={handleConnectionChange}
+                            isActive={isActive}
+                          />
+                        </Suspense>
+                      </ErrorBoundary>
                     ) : (
                       <div className="flex-1 flex items-center justify-center bg-gray-50 text-gray-400">
                         未知画布类型

@@ -1,7 +1,7 @@
 const router = require('express').Router()
 const { authMiddleware } = require('../middleware/auth')
 const { checkCanvasPermission } = require('../middleware/permission')
-const { Canvas, MindMap, KanbanBoard, Swimlane, Comment, CommentReply, User, Vote } = require('../models')
+const { Canvas, MindMap, KanbanBoard, Swimlane, TencentMind, Comment, CommentReply, User, Vote } = require('../models')
 
 function checkOptimisticLock(record, clientUpdatedAt) {
   if (!clientUpdatedAt) return
@@ -287,6 +287,36 @@ router.put('/:id/swimlane', authMiddleware, checkCanvasPermission('editor'), asy
       if (direction !== undefined) record.direction = direction
       if (lanes !== undefined) record.lanes = lanes
       if (elements !== undefined) record.elements = elements
+      await record.save()
+    }
+    res.json(record)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/canvases/:id/tencentmind — 获取腾讯思维导图
+router.get('/:id/tencentmind', authMiddleware, checkCanvasPermission('viewer'), async (req, res, next) => {
+  try {
+    const data = await TencentMind.findOne({ where: { canvas_id: req.params.id } })
+    if (!data) return res.json({ data: null })
+    res.json(data)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/canvases/:id/tencentmind — 保存腾讯思维导图
+router.put('/:id/tencentmind', authMiddleware, checkCanvasPermission('editor'), async (req, res, next) => {
+  try {
+    const { data, updated_at } = req.body
+    const [record, created] = await TencentMind.findOrCreate({
+      where: { canvas_id: req.params.id },
+      defaults: { canvas_id: req.params.id, data: data || {} }
+    })
+    if (!created) {
+      checkOptimisticLock(record, updated_at || req.body.updatedAt)
+      if (data !== undefined) record.data = data
       await record.save()
     }
     res.json(record)

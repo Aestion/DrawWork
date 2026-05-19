@@ -10,7 +10,9 @@
       "Bash(npm *)",
       "Bash(cd * && *)",
       "Bash(npm run *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(node /e/DrawWork/backend/src/app.js)",
+      "Bash(node -p \"require\\('fs'\\).readFileSync\\('e:/DrawWork/frontend/node_modules/simple-mind-map/index.js','utf8'\\).split\\('handleData'\\)[1]?.substring\\(0,200\\)\")"
     ],
     "deny": [
       "Read(.git/**)",

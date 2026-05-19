@@ -253,7 +253,7 @@ router.post('/:id/canvases', authMiddleware, checkBoardPermission('editor'), req
     const boardId = req.params.id
     const { name, type = 'excalidraw' } = req.body
 
-    const validTypes = ['excalidraw', 'mindmap', 'jsmind', 'markmap', 'simplemindmap', 'mindelixir', 'kanban', 'swimlane']
+    const validTypes = ['excalidraw', 'mindmap', 'jsmind', 'markmap', 'simplemindmap', 'mindelixir', 'kanban', 'swimlane', 'tencentmind']
     if (!validTypes.includes(type)) {
       return res.status(400).json({ error: '无效的画布类型' })
     }

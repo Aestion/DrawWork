@@ -6,7 +6,8 @@ export const CANVAS_TYPES = {
   simplemindmap: { label: 'Mind-Map', icon: '🧩' },
   mindelixir: { label: 'Mind Elixir', icon: '💎' },
   kanban: { label: '看板', icon: '📋' },
-  swimlane: { label: '泳道图', icon: '🏊' }
+  swimlane: { label: '泳道图', icon: '🏊' },
+  tencentmind: { label: '腾讯思维', icon: '🧠' }
 }
 
 export const PERMISSION_LABELS = {

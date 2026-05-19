@@ -16,6 +16,7 @@ const Notification = require('./notification')(sequelize, DataTypes)
 const MindMap = require('./mindMap')(sequelize, DataTypes)
 const KanbanBoard = require('./kanbanBoard')(sequelize, DataTypes)
 const Swimlane = require('./swimlane')(sequelize, DataTypes)
+const TencentMind = require('./tencentMind')(sequelize, DataTypes)
 const File = require('./file')(sequelize, DataTypes)
 const AuditLog = require('./auditLog')(sequelize, DataTypes)
 const BoardVisit = require('./boardVisit')(sequelize, DataTypes)
@@ -65,6 +66,9 @@ KanbanBoard.belongsTo(Canvas, { foreignKey: 'canvas_id' })
 Canvas.hasOne(Swimlane, { foreignKey: 'canvas_id', onDelete: 'CASCADE' })
 Swimlane.belongsTo(Canvas, { foreignKey: 'canvas_id' })
 
+Canvas.hasOne(TencentMind, { foreignKey: 'canvas_id', onDelete: 'CASCADE' })
+TencentMind.belongsTo(Canvas, { foreignKey: 'canvas_id' })
+
 Board.hasMany(File, { foreignKey: 'board_id' })
 File.belongsTo(Board, { foreignKey: 'board_id' })
 File.belongsTo(User, { foreignKey: 'uploaded_by' })
@@ -94,6 +98,7 @@ module.exports = {
   MindMap,
   KanbanBoard,
   Swimlane,
+  TencentMind,
   File,
   AuditLog,
   BoardVisit,
