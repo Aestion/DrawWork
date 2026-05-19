@@ -19,7 +19,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import {
-  getRectilinearPath,
+  estimateNodeDimensions,
   updateEdgeHandles,
   calculateMultiTreeLayout,
   moveNode,
@@ -154,26 +154,20 @@ function MindMapEdge({ id, source, target, sourceX, sourceY, targetX, targetY, s
   const targetNode = useStore(useCallback((store) => store.nodeLookup.get(target) || null, [target]))
 
   const edgePath = useMemo(() => {
-    const sourceDepth = sourceNode?.data?.depth || 0
-    const targetDepth = targetNode?.data?.depth || 0
+    const dx = targetX - sourceX
+    const dy = targetY - sourceY
+    const isHorizontal = Math.abs(dx) > Math.abs(dy)
 
-    // 判断是否是根节点与1级子节点连接
-    const isRootToLevel1 = (sourceDepth === 0 && targetDepth === 1) || (sourceDepth === 1 && targetDepth === 0)
-
-    if (isRootToLevel1) {
-      // 保持现有的贝塞尔曲线
-      const dx = Math.abs(targetX - sourceX)
-      const controlOffset = Math.max(dx * 0.5, 50)
-      let path
-      if (targetX > sourceX) {
-        path = `M ${sourceX} ${sourceY} C ${sourceX + controlOffset} ${sourceY}, ${targetX - controlOffset} ${targetY}, ${targetX} ${targetY}`
-      } else {
-        path = `M ${sourceX} ${sourceY} C ${sourceX - controlOffset} ${sourceY}, ${targetX + controlOffset} ${targetY}, ${targetX} ${targetY}`
-      }
-      return path
+    if (isHorizontal) {
+      // 水平主导: 使用水平贝塞尔曲线 (S 形弯曲)
+      const offset = Math.max(Math.abs(dx) * 0.45, 40)
+      const dir = dx > 0 ? 1 : -1
+      return `M ${sourceX} ${sourceY} C ${sourceX + dir * offset} ${sourceY}, ${targetX - dir * offset} ${targetY}, ${targetX} ${targetY}`
     } else {
-      // 其他级别使用直线+转角
-      return getRectilinearPath({ sourceX, sourceY, targetX, targetY })
+      // 垂直主导: 使用垂直贝塞尔曲线
+      const offset = Math.max(Math.abs(dy) * 0.45, 40)
+      const dir = dy > 0 ? 1 : -1
+      return `M ${sourceX} ${sourceY} C ${sourceX} ${sourceY + dir * offset}, ${targetX} ${targetY - dir * offset}, ${targetX} ${targetY}`
     }
   }, [sourceNode, targetNode, sourceX, sourceY, targetX, targetY])
 
@@ -261,6 +255,21 @@ function MindNode({ id, data, selected }) {
   const isRoot = mindMapActions?.rootIds?.has(id) || false
   const editingContext = useContext(EditingNodeContext)
 
+  // Report actual DOM node dimensions to editor for accurate drag collision detection
+  const nodeRef = useRef(null)
+  useEffect(() => {
+    const el = nodeRef.current
+    if (!el) return
+    const reportSize = () => {
+      const rect = el.getBoundingClientRect()
+      mindMapActions?.onNodeResize?.(id, { width: rect.width, height: rect.height })
+    }
+    reportSize()
+    const ro = new ResizeObserver(reportSize)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [id, mindMapActions?.onNodeResize])
+
   // Enter edit mode automatically for newly created nodes.
   // Single per-render effect checks all sources of truth (data flag, context ID, pending ref Set).
   // autoEditConsumedRef guards against firing more than once per component lifetime.
@@ -342,6 +351,7 @@ function MindNode({ id, data, selected }) {
 
   return (
     <div
+      ref={nodeRef}
       data-node-id={id}
       className={`relative rounded-lg border-2 transition-all ${
         isSelected
@@ -667,6 +677,8 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
   const searchInputRef = useRef(null)
   const clipboardRef = useRef(null)
   const viewportRef = useRef({ x: 0, y: 0, zoom: 1 })
+  const reactFlowContainerRef = useRef(null)
+  const setViewportRef = useRef(null)
 
   // 视觉反馈状态
   const [dragTargetNode, setDragTargetNode] = useState(null)
@@ -853,6 +865,30 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
     })
   }, [setEdgesLocal])
 
+  // 磁吸边缘区检测: 参考 TencentMind 60px 边缘区，提升跨侧拖拽体验
+  const getMagneticDropZone = useCallback((draggedNode, sideNodes, scale = 1) => {
+    const MAGNETIC_ZONE = 60 * scale
+    if (!sideNodes || sideNodes.length === 0) return null
+
+    const firstNode = sideNodes[0]
+    const lastNode = sideNodes[sideNodes.length - 1]
+    const dragY = draggedNode.position.y
+
+    // 上方磁吸区: 在第一个节点上方 60px 范围内
+    const distToTop = firstNode.position.y - dragY
+    if (distToTop > 0 && distToTop < MAGNETIC_ZONE) {
+      return { position: 'before', targetNode: firstNode }
+    }
+
+    // 下方磁吸区: 在最后一个节点下方 60px 范围内
+    const distToBottom = dragY - lastNode.position.y
+    if (distToBottom > 0 && distToBottom < MAGNETIC_ZONE) {
+      return { position: 'after', targetNode: lastNode }
+    }
+
+    return null
+  }, [])
+
   // Drag handlers for subtree dragging
   const onNodeDragStart = useCallback((event, node) => {
     dragStartPosRef.current = { id: node.id, x: node.position.x, y: node.position.y }
@@ -893,9 +929,9 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
         }
       }
 
-      // 查找重叠的节点
-      const NODE_WIDTH = 150
-      const NODE_HEIGHT = 50
+      // 使用实际 DOM 尺寸或估算值进行碰撞检测
+      const getNodeSize = (n) => nodeSizesRef.current.get(n.id) || estimateNodeDimensions(n.data?.label)
+      const draggedSize = getNodeSize(node)
       const OVERLAP_THRESHOLD = 0.3 // 视觉反馈使用较低的阈值，给用户提前提示
 
       let targetNode = null
@@ -904,18 +940,20 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
       for (const n of nodesRef.current) {
         if (excludeIds.has(n.id)) continue
 
-        // 计算两个节点的边界框
+        const otherSize = getNodeSize(n)
+
+        // 计算两个节点的边界框（使用各自的尺寸）
         const nodeA = {
-          left: node.position.x - NODE_WIDTH / 2,
-          right: node.position.x + NODE_WIDTH / 2,
-          top: node.position.y - NODE_HEIGHT / 2,
-          bottom: node.position.y + NODE_HEIGHT / 2
+          left: node.position.x - draggedSize.width / 2,
+          right: node.position.x + draggedSize.width / 2,
+          top: node.position.y - draggedSize.height / 2,
+          bottom: node.position.y + draggedSize.height / 2
         }
         const nodeB = {
-          left: n.position.x - NODE_WIDTH / 2,
-          right: n.position.x + NODE_WIDTH / 2,
-          top: n.position.y - NODE_HEIGHT / 2,
-          bottom: n.position.y + NODE_HEIGHT / 2
+          left: n.position.x - otherSize.width / 2,
+          right: n.position.x + otherSize.width / 2,
+          top: n.position.y - otherSize.height / 2,
+          bottom: n.position.y + otherSize.height / 2
         }
 
         // 计算重叠区域
@@ -929,7 +967,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
           const overlapWidth = overlapRight - overlapLeft
           const overlapHeight = overlapBottom - overlapTop
           const overlapArea = overlapWidth * overlapHeight
-          const nodeArea = NODE_WIDTH * NODE_HEIGHT
+          const nodeArea = draggedSize.width * draggedSize.height
           const overlapRatio = overlapArea / nodeArea
 
           // 记录重叠面积最大的节点
@@ -940,24 +978,82 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
         }
       }
 
-      setDragTargetNode(targetNode)
-      setDragDistance(targetNode ? (1 - maxOverlap) : null)
-
-      // 检测拖拽位置区域: before (上方), asChild (中央), after (下方)
-      if (targetNode && isRoot === false) {
-        const NODE_HEIGHT = 50
-        const ZONE_THRESHOLD = 0.25
-        const relativeY = node.position.y - targetNode.position.y
-        const zonePixels = NODE_HEIGHT * ZONE_THRESHOLD
-        if (relativeY < -zonePixels) {
-          setDragInsertPosition('before')
-        } else if (relativeY > zonePixels) {
-          setDragInsertPosition('after')
-        } else {
-          setDragInsertPosition('asChild')
+      // 磁吸边缘区检测: 当无重叠时检查跨侧磁吸区（参考 TencentMind 60px）
+      let magneticZoneResult = null
+      if (!targetNode && !isRoot) {
+        // 检查是否是一级节点跨侧拖拽
+        for (const edge of edgesRef.current) {
+          if (edge.data?.crossConnection || edge.type === 'crossConnection') continue
+          if (edge.target === node.id) {
+            const potentialRoot = nodesRef.current.find(n => n.id === edge.source)
+            if (potentialRoot && potentialRoot.data?.side === 'center') {
+              const rootX = potentialRoot.position.x
+              const crossed = (node.position.x < rootX && node.data?.side === 'right') ||
+                              (node.position.x > rootX && node.data?.side === 'left')
+              if (crossed) {
+                const targetSide = node.data?.side === 'left' ? 'right' : 'left'
+                const sideNodes = nodesRef.current
+                  .filter(n => n.data?.side === targetSide && n.id !== node.id)
+                  .sort((a, b) => a.position.y - b.position.y)
+                magneticZoneResult = getMagneticDropZone(node, sideNodes)
+              }
+            }
+            break
+          }
         }
+      }
+
+      if (magneticZoneResult) {
+        setDragTargetNode(magneticZoneResult.targetNode)
+        setDragDistance(null)
+        setDragInsertPosition(magneticZoneResult.position)
       } else {
-        setDragInsertPosition(null)
+        setDragTargetNode(targetNode)
+        setDragDistance(targetNode ? (1 - maxOverlap) : null)
+
+        // 检测拖拽位置区域: before (上方), asChild (中央), after (下方)
+        if (targetNode && isRoot === false) {
+          const targetSize = nodeSizesRef.current.get(targetNode.id) || estimateNodeDimensions(targetNode.data?.label)
+          const ZONE_THRESHOLD = 0.25
+          const relativeY = node.position.y - targetNode.position.y
+          const zonePixels = targetSize.height * ZONE_THRESHOLD
+          if (relativeY < -zonePixels) {
+            setDragInsertPosition('before')
+          } else if (relativeY > zonePixels) {
+            setDragInsertPosition('after')
+          } else {
+            setDragInsertPosition('asChild')
+          }
+        } else {
+          setDragInsertPosition(null)
+        }
+      }
+    }
+
+    // 拖拽滚动: 拖拽到视口边缘时自动平移
+    if (canEdit && setViewportRef.current) {
+      const container = reactFlowContainerRef.current
+      if (container) {
+        const viewport = viewportRef.current
+        const rect = container.getBoundingClientRect()
+        const mouseX = event.clientX - rect.left
+        const mouseY = event.clientY - rect.top
+        const EDGE_THRESHOLD = 40
+        const SCROLL_SPEED = 8
+
+        let dx = 0, dy = 0
+        if (mouseX < EDGE_THRESHOLD) dx = -SCROLL_SPEED / viewport.zoom
+        else if (mouseX > rect.width - EDGE_THRESHOLD) dx = SCROLL_SPEED / viewport.zoom
+        if (mouseY < EDGE_THRESHOLD) dy = -SCROLL_SPEED / viewport.zoom
+        else if (mouseY > rect.height - EDGE_THRESHOLD) dy = SCROLL_SPEED / viewport.zoom
+
+        if (dx !== 0 || dy !== 0) {
+          setViewportRef.current({
+            x: viewport.x + dx,
+            y: viewport.y + dy,
+            zoom: viewport.zoom
+          })
+        }
       }
     }
   }, [canEdit])
@@ -1077,10 +1173,9 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
       }
 
       // 查找重叠的节点：检查节点是否与另一个节点重叠
-      // 使用节点的位置和大小来判断是否重叠
-      // 假设节点大小为：宽度 150，高度 50（根据实际UI调整）
-      const NODE_WIDTH = 150
-      const NODE_HEIGHT = 50
+      // 使用实际 DOM 尺寸或估算值进行碰撞检测
+      const getNodeSize = (n) => nodeSizesRef.current.get(n.id) || estimateNodeDimensions(n.data?.label)
+      const draggedSize = getNodeSize(node)
       const OVERLAP_THRESHOLD = 0.5 // 重叠面积超过 50% 才触发
 
       let targetNode = null
@@ -1088,18 +1183,20 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
       for (const n of nodesRef.current) {
         if (excludeIds.has(n.id)) continue
 
-        // 计算两个节点的边界框
+        const otherSize = getNodeSize(n)
+
+        // 计算两个节点的边界框（使用各自的尺寸）
         const nodeA = {
-          left: node.position.x - NODE_WIDTH / 2,
-          right: node.position.x + NODE_WIDTH / 2,
-          top: node.position.y - NODE_HEIGHT / 2,
-          bottom: node.position.y + NODE_HEIGHT / 2
+          left: node.position.x - draggedSize.width / 2,
+          right: node.position.x + draggedSize.width / 2,
+          top: node.position.y - draggedSize.height / 2,
+          bottom: node.position.y + draggedSize.height / 2
         }
         const nodeB = {
-          left: n.position.x - NODE_WIDTH / 2,
-          right: n.position.x + NODE_WIDTH / 2,
-          top: n.position.y - NODE_HEIGHT / 2,
-          bottom: n.position.y + NODE_HEIGHT / 2
+          left: n.position.x - otherSize.width / 2,
+          right: n.position.x + otherSize.width / 2,
+          top: n.position.y - otherSize.height / 2,
+          bottom: n.position.y + otherSize.height / 2
         }
 
         // 计算重叠区域
@@ -1113,7 +1210,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
           const overlapWidth = overlapRight - overlapLeft
           const overlapHeight = overlapBottom - overlapTop
           const overlapArea = overlapWidth * overlapHeight
-          const nodeArea = NODE_WIDTH * NODE_HEIGHT
+          const nodeArea = draggedSize.width * draggedSize.height
 
           // 如果重叠面积超过阈值，则触发父节点更换
           if (overlapArea / nodeArea >= OVERLAP_THRESHOLD) {
@@ -1128,9 +1225,10 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
         const targetId = targetNode.id
 
         // 判断插入位置: before (上方), after (下方), asChild (中央)
+        const targetSize = nodeSizesRef.current.get(targetNode.id) || estimateNodeDimensions(targetNode.data?.label)
         const ZONE_THRESHOLD = 0.25
         const relativeY = node.position.y - targetNode.position.y
-        const zonePixels = NODE_HEIGHT * ZONE_THRESHOLD
+        const zonePixels = targetSize.height * ZONE_THRESHOLD
         let dropPosition
         if (relativeY < -zonePixels) {
           dropPosition = 'before'
@@ -1260,6 +1358,69 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
           setNodes(result.nodes)
           setEdges(result.edges)
           return
+        }
+      }
+    }
+
+    // --- MAGNETIC ZONE: check cross-side magnetic drop zone before snapping back ---
+    if (!isRoot && canEdit) {
+      const parentEdge = edgesRef.current.find(
+        e => e.target === node.id && !e.data?.crossConnection && e.type !== 'crossConnection'
+      )
+      if (parentEdge) {
+        const potentialRoot = nodesRef.current.find(n => n.id === parentEdge.source)
+        if (potentialRoot && potentialRoot.data?.side === 'center') {
+          const crossed = (node.position.x < potentialRoot.position.x && node.data?.side === 'right') ||
+                          (node.position.x > potentialRoot.position.x && node.data?.side === 'left')
+          if (crossed) {
+            const targetSide = node.data?.side === 'left' ? 'right' : 'left'
+            const sideNodes = nodesRef.current
+              .filter(n => n.data?.side === targetSide && n.id !== node.id)
+              .sort((a, b) => a.position.y - b.position.y)
+            const magneticResult = getMagneticDropZone(node, sideNodes)
+            if (magneticResult) {
+              captureUndoRef.current()
+              // Switch side and perform magnetic zone insertion
+              const updatedNodes = nodesRef.current.map(n => {
+                if (n.id === node.id) {
+                  return { ...n, data: { ...n.data, side: targetSide } }
+                }
+                return n
+              })
+              const moveResult = moveNode(updatedNodes, edgesRef.current, node.id, magneticResult.targetNode.id, magneticResult.position)
+              if (moveResult) {
+                const savedLayouts = new Map(nodesRef.current.filter(n => !edgesRef.current.some(e => e.target === n.id)).map(n => [n.id, n.data?.layout]))
+                const getLayoutForRoot = (rootId) => savedLayouts.get(rootId) || 'horizontal'
+                const layoutResult = calculateMultiTreeLayout(moveResult.nodes, moveResult.edges, getLayoutForRoot)
+                const layoutPositions = new Map(layoutResult.nodes.map(n => [n.id, n.position]))
+                const findRoot = (nodeId) => {
+                  let current = nodeId
+                  while (true) {
+                    const parentEdge = moveResult.edges.find(e => e.target === current && !e.data?.crossConnection && e.type !== 'crossConnection')
+                    if (!parentEdge) return current
+                    current = parentEdge.source
+                  }
+                }
+                const newRoot = findRoot(magneticResult.targetNode.id)
+                layoutResult.nodes = layoutResult.nodes.map(n => {
+                  const nodeRoot = findRoot(n.id)
+                  if (nodeRoot === newRoot) {
+                    const rootLayoutPos = layoutPositions.get(newRoot)
+                    const rootActualPos = nodesRef.current.find(p => p.id === newRoot)?.position
+                    if (rootLayoutPos && rootActualPos) {
+                      return { ...n, position: { x: n.position.x + (rootActualPos.x - rootLayoutPos.x), y: n.position.y + (rootActualPos.y - rootLayoutPos.y) } }
+                    }
+                  }
+                  const actual = nodesRef.current.find(p => p.id === n.id)
+                  if (actual) return { ...n, position: { ...actual.position } }
+                  return n
+                })
+                setNodes(layoutResult.nodes)
+                setEdges(layoutResult.edges)
+                return
+              }
+            }
+          }
         }
       }
     }
@@ -2234,11 +2395,19 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
     }
   }, [])
 
+  // Store actual node DOM dimensions for accurate drag collision detection
+  const nodeSizesRef = useRef(new Map())
+  const onNodeResize = useCallback((nodeId, { width, height }) => {
+    nodeSizesRef.current.set(nodeId, { width, height })
+  }, [])
+
   const mindMapActions = useMemo(() => ({
     toggleLayout: toggleRootLayout,
     rootIds,
     dragTargetNode,
-    dragInsertPosition
+    dragInsertPosition,
+    nodeSizesRef,
+    onNodeResize
   }), [toggleRootLayout, rootIds, dragTargetNode, dragInsertPosition])
 
   if (yjsLoading) {
@@ -2494,7 +2663,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
         </div>
       )}
 
-      <div className="flex-1 relative">
+      <div ref={reactFlowContainerRef} className="flex-1 relative">
         <EditingNodeContext.Provider value={{ editingNodeId, setEditingNodeId, editingNodeIdRef, pendingAutoEditRef }}>
         <NodeCallbacksContext.Provider value={nodeCallbacks}>
           <MindMapActionsContext.Provider value={mindMapActions}>
@@ -2522,6 +2691,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
             style={{ height: '100%' }}
           >
             <SearchLocator currentMatchId={currentMatchId} nodes={nodes} />
+            <DragScrollHelper setViewportRef={setViewportRef} />
             <ViewportTracker viewportRef={viewportRef} />
             <CollaborativeCursors
               awarenessStates={awarenessStates}
@@ -2597,6 +2767,16 @@ function SearchLocator({ currentMatchId, nodes }) {
     }, 100)
     return () => clearTimeout(t)
   }, [currentMatchId, nodes, setCenter])
+  return null
+}
+
+// Inner component to expose setViewport for drag-scroll (must be inside <ReactFlow>)
+function DragScrollHelper({ setViewportRef }) {
+  const { setViewport } = useReactFlow()
+  useEffect(() => {
+    setViewportRef.current = setViewport
+    return () => { setViewportRef.current = null }
+  }, [setViewport, setViewportRef])
   return null
 }
 

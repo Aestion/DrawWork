@@ -18,11 +18,73 @@ const THEMES = [
   'simple', 'fresh', 'fresh-blue', 'fresh-red'
 ]
 
+const VIDEO_PLACEHOLDER = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#e2e8f0" rx="6"/><circle cx="60" cy="40" r="16" fill="#64748b"/><polygon points="54,32 54,48 66,40" fill="#fff"/></svg>')
+
+// Scan SVG DOM for VIDEO_PLACEHOLDER <image> elements and replace with <foreignObject><video>
+const injectVideoPlaceholders = (containerEl, blobs, apiClient) => {
+  const svg = containerEl?.querySelector('svg')
+  if (!svg) return
+  const svgNs = 'http://www.w3.org/2000/svg'
+  const images = svg.querySelectorAll('image')
+  for (const img of images) {
+    const href = img.getAttribute('href') || img.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || ''
+    if (href.slice(0, 30) !== VIDEO_PLACEHOLDER.slice(0, 30)) continue
+    const g = img.closest('g')
+    if (!g || g.querySelector('foreignObject[data-video]')) continue
+    let blobUrl = g.dataset.videoBlobUrl || ''
+    if (!blobUrl) {
+      const uploadId = g.dataset.videoUploadId || ''
+      if (uploadId && blobs.has(uploadId)) {
+        blobUrl = blobs.get(uploadId)
+      } else {
+        for (const [uid, url] of blobs) {
+          blobUrl = url
+          g.dataset.videoUploadId = uid
+          break
+        }
+      }
+      if (blobUrl) g.dataset.videoBlobUrl = blobUrl
+    }
+    if (!blobUrl) continue
+    const x = parseFloat(img.getAttribute('x')) || 0
+    const y = parseFloat(img.getAttribute('y')) || 0
+    const w = parseFloat(img.getAttribute('width')) || 120
+    const h = parseFloat(img.getAttribute('height')) || 80
+    const fo = document.createElementNS(svgNs, 'foreignObject')
+    fo.setAttribute('data-video', 'true')
+    fo.setAttribute('x', x)
+    fo.setAttribute('y', y)
+    fo.setAttribute('width', w)
+    fo.setAttribute('height', h)
+    fo.style.overflow = 'visible'
+    const div = document.createElement('div')
+    div.style.cssText = `width:${w}px;height:${h}px;line-height:0;`
+    div.innerHTML = `<video src="${blobUrl}" muted loop autoplay playsinline style="width:100%;height:100%;object-fit:cover;border-radius:4px;display:block;"></video>`
+    fo.appendChild(div)
+    img.replaceWith(fo)
+    // If blob URL fails (e.g. revoked after HMR), retry fetching from API
+    const video = div.querySelector('video')
+    const retryUploadId = g.dataset.videoUploadId
+    if (video && retryUploadId && apiClient) {
+      video.addEventListener('error', () => {
+        apiClient.get(`/upload/${retryUploadId}`, { responseType: 'blob' }).then(res => {
+          const newUrl = URL.createObjectURL(res.data)
+          video.src = newUrl
+          video.play().catch(() => {})
+        }).catch(() => {})
+      }, { once: true })
+    }
+  }
+}
+
 const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, roomId, canEdit, boardId, onConnectionChange, isActive = true }, ref) {
   const containerRef = useRef(null)
   const mmRef = useRef(null)
   const originDataRef = useRef(null)
   const saveTimerRef = useRef(null)
+  const activeNodeRef = useRef(null)
+  const blobUrlsRef = useRef(new Set())
+  const pendingVideoBlobsRef = useRef(new Map()) // uploadId → blobUrl
   const [loading, setLoading] = useState(true)
   const [currentLayout, setCurrentLayout] = useState('mindMap')
   const [currentTheme, setCurrentTheme] = useState('default')
@@ -65,6 +127,42 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     if (!containerRef.current || !isActive || loading) return
     let mounted = true
     let mindMap = null
+
+    const restoreNodeMedia = async (mindMap) => {
+      const walk = async (node) => {
+        if (node.nodeData?.data?._uploadId) {
+          const uploadId = node.nodeData.data._uploadId
+          const mediaType = node.nodeData.data._mediaType
+          try {
+            const blobRes = await api.get(`/upload/${uploadId}`, { responseType: 'blob' })
+            const blobUrl = URL.createObjectURL(blobRes.data)
+            blobUrlsRef.current.add(blobUrl)
+            if (mediaType === 'video') {
+              pendingVideoBlobsRef.current.set(uploadId, blobUrl)
+              node.nodeData.data.image = VIDEO_PLACEHOLDER
+              const imgSize = node.nodeData.data._imageSize || { width: 120, height: 80, custom: true }
+              node.nodeData.data.imageSize = imgSize
+            } else {
+              const imageSize = node.nodeData.data._imageSize || { width: 200, height: 150, custom: true }
+              node.nodeData.data.image = blobUrl
+              node.nodeData.data.imageSize = imageSize
+            }
+          } catch (err) {
+            console.error('Failed to restore media:', err)
+          }
+        }
+        if (node.children) {
+          for (const child of node.children) {
+            await walk(child)
+          }
+        }
+      }
+      await walk(mindMap.renderer.renderTree)
+      // Re-render to create SVG <image> elements for placeholders
+      mindMap.render(() => {
+        injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+      })
+    }
 
     const init = async () => {
       const [MindMapModule, DragModule] = await Promise.all([
@@ -158,6 +256,20 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       })
       mmRef.current = mindMap
 
+      // Track active node for media upload
+      mindMap.on('node_active', (node) => {
+        const n = Array.isArray(node) ? node[0] : node
+        activeNodeRef.current = n
+      })
+      mindMap.on('node_click', (node) => {
+        const n = Array.isArray(node) ? node[0] : node
+        activeNodeRef.current = n
+      })
+      mindMap.on('node_tree_render_end', () => {
+        injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+      })
+      restoreNodeMedia(mindMap).catch(console.error)
+
       // Listen for data changes to auto-save
       mindMap.on('data_change', () => {
         clearTimeout(saveTimerRef.current)
@@ -174,6 +286,8 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     return () => {
       mounted = false
       clearTimeout(saveTimerRef.current)
+      blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
+      blobUrlsRef.current.clear()
       if (mmRef.current) {
         mmRef.current.destroy()
         mmRef.current = null
@@ -191,16 +305,9 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     if (!originDataRef.current || !mmRef.current) return
     try {
       const currentData = mmRef.current.getData()
-      const tencentData = originDataRef.current
-
-      // Update the text content of the root
-      if (tencentData.rootTopic?.title?.children?.[0]?.children?.[0]) {
-        tencentData.rootTopic.title.children[0].children[0].text = currentData.data?.text || ''
-      }
-
-      await api.put(`/canvases/${canvasId}/tencentmind`, {
-        data: tencentData
-      })
+      const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
+      originDataRef.current = tencentData
+      await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
     }
@@ -223,6 +330,72 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     setCurrentTheme(theme)
     mmRef.current?.setTheme(theme)
   }, [])
+
+  const handleAddMedia = useCallback(() => {
+    const activeNodes = mmRef.current?.renderer?.activeNodeList
+    const raw = activeNodes?.[0]
+    if (!raw || readonly) return
+
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*,video/*,.gif'
+
+    input.onchange = async (e) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      if (file.size > 10 * 1024 * 1024) {
+        alert('文件大小不能超过 10MB')
+        return
+      }
+
+      const formData = new FormData()
+      formData.append('file', file)
+      try {
+        const res = await api.post(`/upload?board_id=${boardId}`, formData)
+        const uploadId = res.data.id
+
+        const blobRes = await api.get(`/upload/${uploadId}`, { responseType: 'blob' })
+        const blobUrl = URL.createObjectURL(blobRes.data)
+        blobUrlsRef.current.add(blobUrl)
+
+        // Set media data on the node's nodeData.data object
+        if (file.type.startsWith('video/')) {
+          // Placeholder image reserves layout space; injectVideoPlaceholders swaps it for live <video>
+          pendingVideoBlobsRef.current.set(uploadId, blobUrl)
+          raw.nodeData.data.image = VIDEO_PLACEHOLDER
+          raw.nodeData.data.imageSize = { width: 120, height: 80, custom: true }
+          raw.nodeData.data._uploadId = uploadId
+          raw.nodeData.data._mediaType = 'video'
+          raw.nodeData.data._blobUrl = blobUrl
+          raw.nodeData.data._imageSize = { width: 120, height: 80, custom: true }
+        } else {
+          const img = new Image()
+          img.src = blobUrl
+          await img.decode()
+          const maxW = 200, maxH = 150
+          let w = img.naturalWidth, h = img.naturalHeight
+          if (w > maxW || h > maxH) {
+            const ratio = Math.min(maxW / w, maxH / h)
+            w = Math.round(w * ratio)
+            h = Math.round(h * ratio)
+          }
+          raw.nodeData.data.image = blobUrl
+          raw.nodeData.data.imageSize = { width: w, height: h, custom: true }
+          raw.nodeData.data._uploadId = uploadId
+          raw.nodeData.data._mediaType = 'image'
+          raw.nodeData.data._imageSize = { width: w, height: h, custom: true }
+        }
+        mmRef.current?.render(() => {
+          injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+        })
+        mmRef.current?.emit('data_change')
+      } catch (err) {
+        console.error('Upload failed:', err)
+      }
+    }
+
+    input.click()
+  }, [readonly, boardId])
 
   if (loading) {
     return (
@@ -251,6 +424,14 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
           disabled={!canEdit || readonly}
         >
           添加同级
+        </button>
+        <button
+          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          onClick={handleAddMedia}
+          disabled={!canEdit || readonly}
+          title="添加图片/视频"
+        >
+          添加媒体
         </button>
 
         <div className="w-px h-4 bg-gray-300 mx-1" />

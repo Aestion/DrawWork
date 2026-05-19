@@ -50,6 +50,14 @@ function convertNode(tencentNode) {
     node.data._tencentMeta = meta
   }
 
+  // Read media extensions for image/video uploads
+  const media = tencentNode.extensions?.['drawwork.media']
+  if (media) {
+    node.data._uploadId = media.uploadId
+    node.data._mediaType = media.mediaType || 'image'
+    if (media.imageSize) node.data._imageSize = media.imageSize
+  }
+
   // Convert children
   const attached = tencentNode.children?.attached
   if (attached && attached.length > 0) {
@@ -127,6 +135,7 @@ function rebuildNode(text, meta, children) {
   if (meta?.markers) node.markers = meta.markers
   if (meta?.boundaries) node.boundaries = meta.boundaries
   if (meta?.position) node.position = meta.position
+  if (meta?.extensions) node.extensions = meta.extensions
   if (meta?.id !== 'root' && meta?.color) {
     node.style = { color: meta.color }
   }
@@ -146,7 +155,18 @@ function convertBack(smmNode, origMeta) {
       })
     : []
 
-  return rebuildNode(text, meta, children)
+  const node = rebuildNode(text, meta, children)
+
+  // Inject current media data into extensions for save round-trip
+  const uploadId = smmNode.data?._uploadId
+  if (uploadId) {
+    const mediaType = smmNode.data?._mediaType || 'image'
+    const imageSize = smmNode.data?._imageSize
+    node.extensions = node.extensions || {}
+    node.extensions['drawwork.media'] = { uploadId, mediaType, ...(imageSize ? { imageSize } : {}) }
+  }
+
+  return node
 }
 
 /**
@@ -162,11 +182,23 @@ export function simpleMindMapToTencent(smmData, origTencentData) {
 
   const rootTopic = rebuildNode(smmData.data?.text || '', rootMeta, children)
 
+  // Inject root media data
+  const rootUploadId = smmData.data?._uploadId
+  if (rootUploadId) {
+    const mediaType = smmData.data?._mediaType || 'image'
+    const imageSize = smmData.data?._imageSize
+    rootTopic.extensions = rootTopic.extensions || {}
+    rootTopic.extensions['drawwork.media'] = { uploadId: rootUploadId, mediaType, ...(imageSize ? { imageSize } : {}) }
+  }
+
   // Preserve top-level structures
   return {
     rootTopic,
     relationships: origTencentData?.relationships || [],
-    theme: origTencentData?.theme || { topic: 'default' }
+    theme: origTencentData?.theme || { topic: 'default' },
+    style: origTencentData?.style,
+    extensions: origTencentData?.extensions,
+    structureClass: origTencentData?.structureClass
   }
 }
 
