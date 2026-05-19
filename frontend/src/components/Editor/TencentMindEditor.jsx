@@ -89,6 +89,9 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const [currentLayout, setCurrentLayout] = useState('mindMap')
   const [currentTheme, setCurrentTheme] = useState('default')
   const [readonly, setReadonly] = useState(false)
+  const [linkMode, setLinkMode] = useState(false)
+  const linkModeRef = useRef(false)
+  const linkSourceRef = useRef(null)
 
   // Load data from API
   useEffect(() => {
@@ -165,9 +168,10 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     }
 
     const init = async () => {
-      const [MindMapModule, DragModule] = await Promise.all([
+      const [MindMapModule, DragModule, AssociativeLineModule] = await Promise.all([
         import('simple-mind-map'),
-        import('simple-mind-map/src/plugins/Drag.js')
+        import('simple-mind-map/src/plugins/Drag.js'),
+        import('simple-mind-map/src/plugins/AssociativeLine.js')
       ])
       const MindMap = MindMapModule.default
       if (!mounted) return
@@ -242,6 +246,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       }
 
       MindMap.usePlugin(DragClass)
+      MindMap.usePlugin(AssociativeLineModule.default || AssociativeLineModule)
       MindMap.usePlugin(UnbalancedLayoutPlugin)
 
       const smmData = tencentToSimpleMindMap(originDataRef.current)
@@ -264,11 +269,71 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       mindMap.on('node_click', (node) => {
         const n = Array.isArray(node) ? node[0] : node
         activeNodeRef.current = n
+
+        // Link mode: first click = source, second click = target
+        if (linkModeRef.current) {
+          if (!linkSourceRef.current) {
+            linkSourceRef.current = n
+          } else if (n !== linkSourceRef.current) {
+            mmRef.current?.associativeLine?.addLine(linkSourceRef.current, n)
+            linkSourceRef.current = null
+            linkModeRef.current = false
+            setLinkMode(false)
+          }
+        }
       })
       mindMap.on('node_tree_render_end', () => {
         injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
       })
       restoreNodeMedia(mindMap).catch(console.error)
+
+      // Restore associative lines from Tencent relationships
+      const relationships = originDataRef.current?.relationships || []
+      if (relationships.length > 0) {
+        const buildNodeIdMap = (node) => {
+          const map = new Map()
+          const walk = (n) => {
+            const id = n?.nodeData?.data?._tencentMeta?.id
+            if (id) map.set(id, n)
+            if (n.children) n.children.forEach(walk)
+          }
+          walk(node)
+          return map
+        }
+        const nodeMap = buildNodeIdMap(mindMap.renderer.renderTree)
+        for (const rel of relationships) {
+          const fromNode = nodeMap.get(rel.end1Id)
+          const toNode = nodeMap.get(rel.end2Id)
+          if (fromNode && toNode) {
+            mindMap.associativeLine?.addLine(fromNode, toNode)
+          }
+        }
+      }
+
+      // Restore generalizations from extensions
+      try {
+        const restoreGeneralizations = (parentNode) => {
+          const walk = (node) => {
+            const meta = node?.nodeData?.data?._tencentMeta
+            const genData = meta?.extensions?.['drawwork.generalization']
+            if (genData && genData.length > 0 && node.children) {
+              const range = genData[0].range
+              if (range) {
+                const targetChildren = node.children.slice(range[0], range[1] + 1)
+                if (targetChildren.length > 0) {
+                  mindMap.renderer.setActiveNodeList(targetChildren)
+                  mindMap.execCommand('ADD_GENERALIZATION', { text: genData[0].text || '概要' })
+                }
+              }
+            }
+            if (node.children) node.children.forEach(walk)
+          }
+          walk(parentNode)
+        }
+        restoreGeneralizations(mindMap.renderer.renderTree)
+      } catch (err) {
+        console.error('Failed to restore generalizations:', err)
+      }
 
       // Listen for data changes to auto-save
       mindMap.on('data_change', () => {
@@ -306,6 +371,29 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     try {
       const currentData = mmRef.current.getData()
       const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
+
+      // Persist associative lines as Tencent relationships (always overwrite)
+      const lineList = mmRef.current.associativeLine?.lineList || []
+      const relationships = []
+      for (const line of lineList) {
+        const fromNode = line[3]
+        const toNode = line[4]
+        const fromId = fromNode?.nodeData?.data?._tencentMeta?.id
+        const toId = toNode?.nodeData?.data?._tencentMeta?.id
+        if (fromId && toId) {
+          relationships.push({
+            id: `line_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            end1Id: fromId,
+            end2Id: toId,
+            title: '',
+            controlPoints: {},
+            lineEndPoints: {},
+            style: { lineColor: '#319B62' }
+          })
+        }
+      }
+      tencentData.relationships = relationships
+
       originDataRef.current = tencentData
       await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
     } catch (err) {
@@ -432,6 +520,49 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
           title="添加图片/视频"
         >
           添加媒体
+        </button>
+
+        <button
+          className={`text-xs px-2 py-1 rounded disabled:opacity-50 ${linkMode ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          onClick={() => {
+            setLinkMode(prev => {
+              const next = !prev
+              linkModeRef.current = next
+              if (!next) linkSourceRef.current = null
+              return next
+            })
+          }}
+          disabled={!canEdit || readonly}
+          title={linkMode ? '点击节点设置起始节点' : '创建关联线'}
+        >
+          {linkMode ? '取消关联线' : '关联线'}
+        </button>
+        <button
+          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          onClick={() => mmRef.current?.associativeLine?.removeLine()}
+          disabled={!canEdit || readonly}
+          title="删除选中的关联线"
+        >
+          删除关联线
+        </button>
+
+        <div className="w-px h-4 bg-gray-300 mx-1" />
+
+        <button
+          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          onClick={() => mmRef.current?.execCommand('ADD_GENERALIZATION')}
+          disabled={!canEdit || readonly}
+          title="为选中同级节点创建概要"
+        >
+          添加概要
+        </button>
+        <button
+          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          onClick={() => mmRef.current?.execCommand('REMOVE_GENERALIZATION')}
+          disabled={!canEdit || readonly}
+          title="删除选中的概要节点"
+        >
+          删除概要
         </button>
 
         <div className="w-px h-4 bg-gray-300 mx-1" />

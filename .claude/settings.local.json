@@ -131,7 +131,9 @@
       "Bash(findstr -v findstr)",
       "Bash(git stash *)",
       "Skill(webapp-testing)",
-      "Skill(webapp-testing:*)"
+      "Skill(webapp-testing:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/health)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/)"
     ],
     "additionalDirectories": [
       "\\"

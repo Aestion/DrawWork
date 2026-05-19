@@ -148,14 +148,29 @@ function rebuildNode(text, meta, children) {
 function convertBack(smmNode, origMeta) {
   const text = smmNode.data?.text || ''
   const meta = smmNode.data?._tencentMeta || origMeta || {}
-  const children = smmNode.children
-    ? smmNode.children.map((c, i) => {
+
+  // Detect and skip generalization children when converting back
+  const generalization = smmNode.data?.generalization
+  let children = []
+  if (smmNode.children) {
+    const numGen = generalization ? generalization.length : 0
+    const regularCount = smmNode.children.length - numGen
+    smmNode.children.forEach((c, i) => {
+      if (i < regularCount) {
         const childMeta = c.data?._tencentMeta || (origMeta?.children?.[i])
-        return convertBack(c, childMeta)
-      })
-    : []
+        children.push(convertBack(c, childMeta))
+      }
+      // generalization children (i >= regularCount) are skipped
+    })
+  }
 
   const node = rebuildNode(text, meta, children)
+
+  // Store generalization data in extensions for round-trip persistence
+  if (generalization && generalization.length > 0) {
+    node.extensions = node.extensions || {}
+    node.extensions['drawwork.generalization'] = generalization
+  }
 
   // Inject current media data into extensions for save round-trip
   const uploadId = smmNode.data?._uploadId
