@@ -20,6 +20,27 @@ function extractText(title) {
 }
 
 /**
+ * Extract rich text segments from a Tencent Docs title object.
+ * Returns array of {text, color} pairs if multiple distinct colors exist, else null.
+ */
+function extractRichText(title) {
+  if (!title?.children) return null
+  const segments = []
+  for (const para of title.children) {
+    if (para.children) {
+      for (const c of para.children) {
+        segments.push({ text: c.text || '', color: c.color || '#1f1f1f' })
+      }
+    }
+  }
+  if (segments.length <= 1) return null
+  // Check if there are actually multiple distinct colors
+  const uniqueColors = new Set(segments.map(s => s.color))
+  if (uniqueColors.size <= 1) return null
+  return segments
+}
+
+/**
  * Recursively convert Tencent rootTopic node to simple-mind-map node.
  */
 function convertNode(tencentNode) {
@@ -46,6 +67,22 @@ function convertNode(tencentNode) {
   if (tencentNode.style?.color) meta.color = tencentNode.style.color
   if (tencentNode.position) meta.position = tencentNode.position
   if (tencentNode.extensions) meta.extensions = tencentNode.extensions
+
+  // Handle rich text: if title has multiple colored segments, store for round-trip
+  const richSegments = extractRichText(tencentNode.title)
+  if (richSegments) {
+    meta.richText = richSegments
+    node.data.richText = true
+    // Convert to HTML for simple-mind-map RichText plugin
+    node.data.text = richSegments.map(s => {
+      const escaped = (s.text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      if (s.color && s.color !== '#1f1f1f') {
+        return `<span style="color:${s.color}">${escaped}</span>`
+      }
+      return escaped
+    }).join('')
+  }
+
   if (Object.keys(meta).length) {
     node.data._tencentMeta = meta
   }
@@ -124,12 +161,34 @@ function makeTitle(text, color) {
 }
 
 /**
+ * Build a Tencent Docs rich text title from multiple text segments with colors.
+ */
+function makeRichTitle(segments) {
+  return {
+    children: [{
+      type: 'paragraph',
+      children: segments.map(s => ({
+        type: 'text',
+        text: s.text || '',
+        ...(s.color && s.color !== '#1f1f1f' ? { color: s.color } : {})
+      }))
+    }],
+    type: 'document',
+    paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0,
+    anchor: 1, whiteSpaceType: 0, anchorCenter: false,
+    docSizeType: -2, columnNumber: 1, columnSpace: 0,
+    handingChar4OneLine: false, handingMaxSpace: -1,
+    tailWhitespaceCalculation: 'exclude'
+  }
+}
+
+/**
  * Rebuild a Tencent Docs node from saved metadata + current text.
  */
 function rebuildNode(text, meta, children) {
   const node = {
     id: meta?.id || `node_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    title: makeTitle(text, meta?.color),
+    title: meta?.richText ? makeRichTitle(meta.richText) : makeTitle(text, meta?.color),
     children: { attached: children || [], detached: [] }
   }
   if (meta?.markers) node.markers = meta.markers
@@ -146,8 +205,15 @@ function rebuildNode(text, meta, children) {
  * Recursively convert simple-mind-map node back to Tencent format.
  */
 function convertBack(smmNode, origMeta) {
-  const text = smmNode.data?.text || ''
+  let text = smmNode.data?.text || ''
   const meta = smmNode.data?._tencentMeta || origMeta || {}
+
+  // Strip HTML tags added by RichText plugin for non-rich-text nodes.
+  // The plugin wraps ALL text in <p> tags during editing (even without richText: true),
+  // so non-rich-text nodes end up with text like "<p>RPG</p>" instead of "RPG".
+  if (!meta?.richText && text.includes('<')) {
+    text = text.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '')
+  }
 
   // Detect and skip generalization children when converting back
   const generalization = smmNode.data?.generalization
@@ -170,6 +236,25 @@ function convertBack(smmNode, origMeta) {
   if (generalization && generalization.length > 0) {
     node.extensions = node.extensions || {}
     node.extensions['drawwork.generalization'] = generalization
+  }
+
+  // Convert simple-mind-map icon data back to Tencent markers
+  const iconData = smmNode.data?.icon
+  if (iconData && iconData.length > 0) {
+    const markers = iconData.map(iconKey => {
+      let markerId
+      if (iconKey === 'tencent_question') markerId = 'symbol-question'
+      else if (iconKey === 'tencent_priority') markerId = 'symbol-priority'
+      else if (iconKey === 'tencent_progress') markerId = 'symbol-progress'
+      return markerId ? {
+        markerId,
+        id: `marker_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        color: markerId === 'symbol-question' ? '#f88825' : '#e74c3c'
+      } : null
+    }).filter(Boolean)
+    if (markers.length > 0) {
+      node.markers = markers
+    }
   }
 
   // Inject current media data into extensions for save round-trip
