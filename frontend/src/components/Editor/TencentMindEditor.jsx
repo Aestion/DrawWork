@@ -141,6 +141,9 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     if (!containerRef.current || !isActive || loading) return
     let mounted = true
     let mindMap = null
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setContextMenuRef.current(null)
+    }
 
     const restoreNodeMedia = async (mindMap) => {
       const walk = async (node) => {
@@ -296,9 +299,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         contextNodeRef.current = node
         setContextMenuRef.current({ x: e.clientX, y: e.clientY, node })
       })
-      const onKeyDown = (e) => {
-        if (e.key === 'Escape') setContextMenuRef.current(null)
-      }
       document.addEventListener('keydown', onKeyDown)
 
       // Track active node for media upload
@@ -672,14 +672,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         </label>
 
         <div className="flex-1" />
-
-        <button
-          className="text-xs px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
-          onClick={saveData}
-          disabled={!canEdit || readonly}
-        >
-          保存
-        </button>
       </div>
 
       {/* Context menu overlay */}
