@@ -102,8 +102,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const [contextMenu, setContextMenu] = useState(null)
   const contextNodeRef = useRef(null)
   const markerMenuRef = useRef(null)
-  const readonlyRef = useRef(readonly)
-  readonlyRef.current = readonly
   const setContextMenuRef = useRef(setContextMenu)
 
   // Get auth token from store (consistent with MindMapEditor)
@@ -293,22 +291,11 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       })
       mmRef.current = mindMap
 
-      // Right-click context menu
-      const onContextMenu = (e) => {
-        if (readonlyRef.current) return
-        let target = e.target
-        while (target && !target.dataset?.nodeUid) {
-          target = target.parentElement
-        }
-        if (!target) return
-        const uid = target.dataset.nodeUid
-        const node = mindMap.renderer.findNodeByUid(uid)
-        if (!node) return
-        e.preventDefault()
+      // Right-click context menu (library emits node_contextmenu on node groups)
+      mindMap.on('node_contextmenu', (e, node) => {
         contextNodeRef.current = node
         setContextMenuRef.current({ x: e.clientX, y: e.clientY, node })
-      }
-      containerRef.current.addEventListener('contextmenu', onContextMenu)
+      })
       const onKeyDown = (e) => {
         if (e.key === 'Escape') setContextMenuRef.current(null)
       }
@@ -455,7 +442,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     init()
 
     return () => {
-      containerRef.current?.removeEventListener('contextmenu', onContextMenu)
       document.removeEventListener('keydown', onKeyDown)
       mounted = false
       clearTimeout(saveTimerRef.current)
