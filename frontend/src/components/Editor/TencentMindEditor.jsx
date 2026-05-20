@@ -99,7 +99,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const prevCanvasIdRef = useRef(canvasId)
   const lastAppliedVersionRef = useRef(0)
   const saveDataRef = useRef(null)
-  saveDataRef.current = saveData
 
   // Get auth token from store (consistent with MindMapEditor)
   const token = useAuthStore((state) => state.token)
@@ -486,13 +485,14 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       tencentData.relationships = relationships
 
       originDataRef.current = tencentData
-      tencentDataRef.current = tencentData
       syncToYjs(tencentData)
       await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
     }
   }, [canvasId, syncToYjs])
+
+  saveDataRef.current = saveData
 
   const addSiblingNode = useCallback(() => {
     mmRef.current?.execCommand('INSERT_NODE')
@@ -578,6 +578,47 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     input.click()
   }, [readonly, boardId])
 
+  const handleRemoveGeneralization = useCallback(() => {
+    const mm = mmRef.current
+    if (!mm) return
+
+    // Find any node that has generalization data
+    const findGen = (n) => {
+      if (!n) return null
+      const gen = n.getData?.('generalization') ?? n.data?.generalization ?? n.nodeData?.data?.generalization
+      if (gen != null) return n
+      for (const c of n.children || []) {
+        const found = findGen(c)
+        if (found) return found
+      }
+      return null
+    }
+
+    const node = findGen(mm.renderer?.renderTree)
+    if (node) {
+      // Direct property removal (most reliable)
+      if (node.nodeData?.data) {
+        node.nodeData.data.generalization = null
+      }
+      if (node.data) {
+        node.data.generalization = null
+      }
+      // Also try library command
+      try { mm.execCommand('SET_NODE_DATA', node, { generalization: null }) } catch (e) {}
+      mm.render()
+      mm.emit('data_change')
+
+      // Manually clean up any generalization child nodes
+      if (node.children) {
+        node.children = node.children.filter(c => !c.isGeneralization)
+      }
+      mm.render()
+      return
+    }
+
+    mm.execCommand('REMOVE_GENERALIZATION')
+  }, [])
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center bg-gray-50 text-gray-400">
@@ -651,7 +692,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         </button>
         <button
           className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={() => mmRef.current?.execCommand('REMOVE_GENERALIZATION')}
+          onClick={handleRemoveGeneralization}
           disabled={!canEdit || readonly}
           title="删除选中的概要节点"
         >
