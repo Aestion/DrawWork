@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, forwardRef, useCallback } from 'react'
 import { tencentToSimpleMindMap, simpleMindMapToTencent, DEFAULT_TENCENT_MIND } from '../../lib/tencent-mind-utils'
 import UnbalancedLayoutPlugin from '../../lib/unbalanced-layout-plugin'
-import { TENCENT_MARKER_ICONS } from '../../lib/marker-icons'
+import { TENCENT_MARKER_ICONS, questionIcon, priorityIcon, progressIcon, starIcon, checkIcon, crossIcon, ideaIcon, warningIcon, targetIcon, clockIcon } from '../../lib/marker-icons'
 import api from '../../lib/axios'
 import { useTencentMindYjs } from '../../hooks/useTencentMindYjs'
 import { useAuthStore } from '../../stores/authStore'
@@ -99,6 +99,12 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const prevCanvasIdRef = useRef(canvasId)
   const lastAppliedVersionRef = useRef(0)
   const saveDataRef = useRef(null)
+  const [contextMenu, setContextMenu] = useState(null)
+  const contextNodeRef = useRef(null)
+  const markerMenuRef = useRef(null)
+  const readonlyRef = useRef(readonly)
+  readonlyRef.current = readonly
+  const setContextMenuRef = useRef(setContextMenu)
 
   // Get auth token from store (consistent with MindMapEditor)
   const token = useAuthStore((state) => state.token)
@@ -287,6 +293,27 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       })
       mmRef.current = mindMap
 
+      // Right-click context menu
+      const onContextMenu = (e) => {
+        if (readonlyRef.current) return
+        let target = e.target
+        while (target && !target.dataset?.nodeUid) {
+          target = target.parentElement
+        }
+        if (!target) return
+        const uid = target.dataset.nodeUid
+        const node = mindMap.renderer.findNodeByUid(uid)
+        if (!node) return
+        e.preventDefault()
+        contextNodeRef.current = node
+        setContextMenuRef.current({ x: e.clientX, y: e.clientY, node })
+      }
+      containerRef.current.addEventListener('contextmenu', onContextMenu)
+      const onKeyDown = (e) => {
+        if (e.key === 'Escape') setContextMenuRef.current(null)
+      }
+      document.addEventListener('keydown', onKeyDown)
+
       // Track active node for media upload
       mindMap.on('node_active', (node) => {
         const n = Array.isArray(node) ? node[0] : node
@@ -428,6 +455,8 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     init()
 
     return () => {
+      containerRef.current?.removeEventListener('contextmenu', onContextMenu)
+      document.removeEventListener('keydown', onKeyDown)
       mounted = false
       clearTimeout(saveTimerRef.current)
       blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
@@ -493,14 +522,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   }, [canvasId, syncToYjs])
 
   saveDataRef.current = saveData
-
-  const addSiblingNode = useCallback(() => {
-    mmRef.current?.execCommand('INSERT_NODE')
-  }, [])
-
-  const addChildNode = useCallback(() => {
-    mmRef.current?.execCommand('INSERT_CHILD_NODE')
-  }, [])
 
   const handleLayoutChange = useCallback((layout) => {
     setCurrentLayout(layout)
@@ -633,110 +654,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       <div className="flex items-center gap-2 px-3 py-2 bg-white border-b shrink-0 flex-wrap">
         <span className="text-xs text-gray-400 font-mono mr-2">腾讯思维</span>
 
-        <button
-          className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-          onClick={addChildNode}
-          disabled={!canEdit || readonly}
-        >
-          添加子节点
-        </button>
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={addSiblingNode}
-          disabled={!canEdit || readonly}
-        >
-          添加同级
-        </button>
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={handleAddMedia}
-          disabled={!canEdit || readonly}
-          title="添加图片/视频"
-        >
-          添加媒体
-        </button>
-
-        <button
-          className={`text-xs px-2 py-1 rounded disabled:opacity-50 ${linkMode ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
-          onClick={() => {
-            setLinkMode(prev => {
-              const next = !prev
-              linkModeRef.current = next
-              if (!next) linkSourceRef.current = null
-              return next
-            })
-          }}
-          disabled={!canEdit || readonly}
-          title={linkMode ? '点击节点设置起始节点' : '创建关联线'}
-        >
-          {linkMode ? '取消关联线' : '关联线'}
-        </button>
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={() => mmRef.current?.associativeLine?.removeLine()}
-          disabled={!canEdit || readonly}
-          title="删除选中的关联线"
-        >
-          删除关联线
-        </button>
-
-        <div className="w-px h-4 bg-gray-300 mx-1" />
-
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={() => mmRef.current?.execCommand('ADD_GENERALIZATION')}
-          disabled={!canEdit || readonly}
-          title="为选中同级节点创建概要"
-        >
-          添加概要
-        </button>
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={handleRemoveGeneralization}
-          disabled={!canEdit || readonly}
-          title="删除选中的概要节点"
-        >
-          删除概要
-        </button>
-
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={() => mmRef.current?.execCommand('ADD_OUTER_FRAME', null, { strokeColor: '#0984e3', fill: 'rgba(9,132,227,0.05)' })}
-          disabled={!canEdit || readonly}
-          title="为选中节点添加外框"
-        >
-          添加外框
-        </button>
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={() => mmRef.current?.outerFrame?.removeActiveOuterFrame()}
-          disabled={!canEdit || readonly}
-          title="删除选中的外框"
-        >
-          删除外框
-        </button>
-
-        <button
-          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
-          onClick={() => {
-            const activeNode = activeNodeRef.current
-            if (!activeNode || !mmRef.current) return
-            const currentIcons = activeNode.getData('icon') || []
-            if (currentIcons.includes('tencent_question')) {
-              activeNode.setIcon([])
-            } else {
-              activeNode.setIcon(['tencent_question'])
-            }
-            mmRef.current.emit('data_change')
-          }}
-          disabled={!canEdit || readonly}
-          title="切换标记图标（问号）"
-        >
-          标记
-        </button>
-
-        <div className="w-px h-4 bg-gray-300 mx-1" />
-
         <select
           className="text-xs border rounded px-2 py-1"
           value={currentLayout}
@@ -779,10 +696,165 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         </button>
       </div>
 
+      {/* Context menu overlay */}
+      {contextMenu && (
+        <div
+          className="fixed inset-0 z-50"
+          onContextMenu={e => e.preventDefault()}
+          onClick={(e) => { if (e.target === e.currentTarget) setContextMenu(null) }}
+        >
+          <div
+            ref={menuEl => {
+              if (!menuEl) return
+              const rect = menuEl.getBoundingClientRect()
+              if (rect.right > window.innerWidth) menuEl.style.left = (window.innerWidth - rect.width - 8) + 'px'
+              if (rect.bottom > window.innerHeight) menuEl.style.top = (window.innerHeight - rect.height - 8) + 'px'
+            }}
+            className="absolute bg-white rounded-lg shadow-xl border border-gray-200 py-1 min-w-[160px] text-sm"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={e => e.stopPropagation()}
+          >
+            <ContextMenuItem onClick={() => { mmRef.current?.execCommand('INSERT_CHILD_NODE'); setContextMenu(null) }}>
+              添加子节点
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => { mmRef.current?.execCommand('INSERT_NODE'); setContextMenu(null) }}
+              disabled={contextMenu.node.isRoot}
+            >
+              添加同级
+            </ContextMenuItem>
+
+            <ContextMenuDivider />
+
+            <ContextMenuItem onClick={() => { setContextMenu(null); handleAddMedia() }}>
+              添加图片/视频
+            </ContextMenuItem>
+
+            <ContextMenuDivider />
+
+            <ContextMenuItem
+              onClick={() => { mmRef.current?.execCommand('ADD_GENERALIZATION'); setContextMenu(null) }}
+              disabled={contextMenu.node.isRoot}
+            >
+              添加概要
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => { setContextMenu(null); handleRemoveGeneralization() }}
+              disabled={contextMenu.node.isRoot}
+            >
+              删除概要
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => { mmRef.current?.execCommand('ADD_OUTER_FRAME', null, { strokeColor: '#0984e3', fill: 'rgba(9,132,227,0.05)' }); setContextMenu(null) }}>
+              添加外框
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => { mmRef.current?.outerFrame?.removeActiveOuterFrame(); setContextMenu(null) }}>
+              删除外框
+            </ContextMenuItem>
+
+            <ContextMenuDivider />
+
+            <ContextMenuItem onClick={() => { setLinkMode(true); linkModeRef.current = true; setContextMenu(null) }}>
+              创建关联线
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => { mmRef.current?.associativeLine?.removeLine(); setContextMenu(null) }}>
+              删除关联线
+            </ContextMenuItem>
+
+            <ContextMenuDivider />
+
+            <div className="relative">
+              <button
+                className="w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center justify-between"
+                onMouseEnter={() => markerMenuRef.current?.classList.remove('hidden')}
+                onMouseLeave={(e) => {
+                  setTimeout(() => {
+                    if (markerMenuRef.current && !markerMenuRef.current.matches(':hover')) {
+                      markerMenuRef.current.classList.add('hidden')
+                    }
+                  }, 200)
+                }}
+                onClick={(e) => {
+                  const menu = markerMenuRef.current
+                  if (menu) menu.classList.toggle('hidden')
+                }}
+              >
+                <span>标记</span>
+                <span className="text-gray-400">▸</span>
+              </button>
+              <div
+                ref={markerMenuRef}
+                className="hidden absolute left-full top-0 ml-1 bg-white rounded-lg shadow-xl border border-gray-200 p-2"
+                onMouseEnter={() => markerMenuRef.current?.classList.remove('hidden')}
+                onMouseLeave={() => markerMenuRef.current?.classList.add('hidden')}
+              >
+                <div className="grid grid-cols-5 gap-1 w-[140px]">
+                  {[
+                    { key: 'tencent_question', label: '疑问', svg: questionIcon },
+                    { key: 'tencent_priority', label: '优先级', svg: priorityIcon },
+                    { key: 'tencent_progress', label: '进度', svg: progressIcon },
+                    { key: 'tencent_star', label: '星标', svg: starIcon },
+                    { key: 'tencent_check', label: '完成', svg: checkIcon },
+                    { key: 'tencent_cross', label: '错误', svg: crossIcon },
+                    { key: 'tencent_idea', label: '灵感', svg: ideaIcon },
+                    { key: 'tencent_warning', label: '警告', svg: warningIcon },
+                    { key: 'tencent_target', label: '目标', svg: targetIcon },
+                    { key: 'tencent_clock', label: '时钟', svg: clockIcon },
+                  ].map(({ key, label, svg }) => {
+                    const node = contextNodeRef.current
+                    const active = node ? (node.getData?.('icon') || node.data?.icon || []).includes(key) : false
+                    return (
+                      <button
+                        key={key}
+                        title={label}
+                        className={`w-7 h-7 flex items-center justify-center rounded ${
+                          active ? 'bg-blue-100 ring-2 ring-blue-400' : 'hover:bg-gray-100'
+                        }`}
+                        onClick={() => {
+                          const mm = mmRef.current
+                          const node = contextNodeRef.current
+                          if (!mm || !node) return
+                          const icons = node.getData?.('icon') || []
+                          if (icons.includes(key)) {
+                            node.setIcon(icons.filter(k => k !== key))
+                          } else {
+                            node.setIcon([...icons, key])
+                          }
+                          mm.emit('data_change')
+                          setContextMenu(null)
+                        }}
+                        dangerouslySetInnerHTML={{ __html: svg }}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mind map container */}
       <div ref={containerRef} className="flex-1 overflow-hidden" />
     </div>
   )
 })
+
+const ContextMenuItem = ({ onClick, disabled, children }) => (
+  <button
+    className={`w-full text-left px-3 py-1.5 flex items-center gap-2 ${
+      disabled
+        ? 'text-gray-300 cursor-not-allowed'
+        : 'text-gray-700 hover:bg-gray-100'
+    }`}
+    onClick={disabled ? undefined : onClick}
+    disabled={disabled}
+  >
+    {children}
+  </button>
+)
+
+const ContextMenuDivider = () => (
+  <div className="h-px bg-gray-200 my-1" />
+)
 
 export default TencentMindEditor
