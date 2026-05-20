@@ -2,16 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
-// Derive WebSocket URL: use VITE_YJS_WS_URL env, or build from current location
-const DEFAULT_WS_PORT = 3001
+// Derive WebSocket URL: use VITE_YJS_WS_URL env, or route through Vite proxy /ws
 function getWsUrl() {
   if (import.meta.env.VITE_YJS_WS_URL) {
     return import.meta.env.VITE_YJS_WS_URL
   }
-  // In development, default to localhost:3001
+  // Route through the Vite proxy at /ws (→ ws://localhost:3003)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.hostname || 'localhost'
-  return `${protocol}//${host}:${DEFAULT_WS_PORT}`
+  return `${protocol}//${window.location.host}/ws`
 }
 
 // Module-level connection registry
@@ -138,6 +136,7 @@ export function useYjs(roomId, token, options = {}) {
   const [connected, setConnected] = useState(false)
   const [synced, setSynced] = useState(false)
   const [onlineCount, setOnlineCount] = useState(1)
+  const [yMapInstance, setYMapInstance] = useState(null)
   const connRef = useRef(null)
   const syncedRef = useRef(false)
   const connectedRef = useRef(false)
@@ -151,6 +150,7 @@ export function useYjs(roomId, token, options = {}) {
 
     const conn = getConnection(roomId, token, type)
     connRef.current = conn
+    setYMapInstance(conn.yMap)
 
     // Set local state based on actual provider state
     // (handles both new connections and reused connections from StrictMode)
@@ -361,5 +361,5 @@ export function useYjs(roomId, token, options = {}) {
     return conn.awareness.getStates()
   }, [])
 
-  return { connected, synced, onlineCount, connectedRef, setData, getData, observe, awareness: connRef.current?.awareness, updateAwareness, getAwarenessStates, yMap: connRef.current?.yMap }
+  return { connected, synced, onlineCount, connectedRef, setData, getData, observe, awareness: connRef.current?.awareness, updateAwareness, getAwarenessStates, yMap: yMapInstance }
 }
