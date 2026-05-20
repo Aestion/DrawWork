@@ -32,7 +32,7 @@ const { Pool } = require('pg')
 const sqlite3 = require('sqlite3')
 const { open } = require('sqlite')
 
-const PORT = process.env.PORT || 3001
+const PORT = process.env.YJS_PORT || process.env.PORT || 3001
 const SAVE_INTERVAL = parseInt(process.env.YJS_SAVE_INTERVAL, 10) || 10000
 const API_URL = (process.env.API_URL || 'http://localhost:3000').replace(/\/+$/, '')
 

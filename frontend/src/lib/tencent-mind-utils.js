@@ -29,7 +29,7 @@ function extractRichText(title) {
   for (const para of title.children) {
     if (para.children) {
       for (const c of para.children) {
-        segments.push({ text: c.text || '', color: c.color || '#1f1f1f' })
+        segments.push({ text: cleanRichTextArtifact(c.text || ''), color: c.color || '#1f1f1f' })
       }
     }
   }
@@ -41,10 +41,28 @@ function extractRichText(title) {
 }
 
 /**
+ * Decode nested HTML entities and strip HTML tags from text corrupted by
+ * RichText plugin save/load cycles (e.g. "&amp;lt;p&amp;gt;..." → "...").
+ */
+function cleanRichTextArtifact(text) {
+  if (!text || !text.includes('&')) return text
+  // Decode nested entities iteratively
+  let result = text
+  let prev
+  do {
+    prev = result
+    result = result.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  } while (result !== prev)
+  // Strip HTML tags left after decoding
+  return result.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '').trim()
+}
+
+/**
  * Recursively convert Tencent rootTopic node to simple-mind-map node.
  */
 function convertNode(tencentNode) {
-  const text = extractText(tencentNode.title)
+  const rawText = extractText(tencentNode.title)
+  const text = cleanRichTextArtifact(rawText)
   const node = {
     data: { text }
   }
