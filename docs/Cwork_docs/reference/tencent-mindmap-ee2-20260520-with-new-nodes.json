@@ -1,0 +1,20 @@
+{
+  "snapshot_date": "2026-05-20",
+  "source_url": "https://doc.weixin.qq.com/mind/m4_AeUArAYSAH4CNBZS58tR4R369W6ZQ",
+  "note": "完整数据请参考原始的 API response（get_network_request reqid=294），此处记录结构概要",
+  "new_nodes_added": [
+    "分支主题7 (YOHvJ_ufMn7_qZeOR0qEf) + 子主题",
+    "分支主题8 (FEVIKVw_S_j6v7a4G5MPP) + 3个子主题",
+    "子主题2 (jzh89OyGzQUSMNLEkqeey) + 2个子主题",
+    "子主题3 (ulim662qpBZWHpY_wJpnZ) 下扩展了多层树结构",
+    "外框 (aAPQTB3Kra0VQhUUOOxAU) — 标题\"1221313\", range [0,1]",
+    "概要 (summaries): \"13113\" 和 \"11313\"",
+    "从子主题4(yiWrs6o234n-AFuJRj1OZ) 到 概要\"11313\"的关联线"
+  ],
+  "changed_fields": {
+    "right-number": "从5变为6（结构调整）",
+    "rev": 824,
+    "attached_count": 11
+  },
+  "fileData_schema_ref": "2026-05-20-tencent-mind-api-analysis.md"
+}

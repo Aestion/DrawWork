@@ -1,12 +1,9 @@
 {
   "mcpServers": {
     "chrome-devtools-mcp": {
-      "command": "chrome-devtools-mcp",
-      "args": ["--headless", "--no-usage-statistics", "--viewport", "1280x720", "--user-data-dir", "C:\Users\54656\.openclaw\workspace\chrome-user-1"]
-    },
-    "chrome-devtools-mcp-2": {
-      "command": "chrome-devtools-mcp",
-      "args": ["--headless", "--no-usage-statistics", "--viewport", "1280x720", "--user-data-dir", "C:\Users\54656\.openclaw\workspace\chrome-user-2"]
+      "type": "stdio",
+      "command": "npx",
+      "args": ["chrome-devtools-mcp@latest", "--viewport", "1280x720", "--categoryNetwork"]
     }
   }
 }

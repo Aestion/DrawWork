@@ -1,0 +1,38 @@
+{
+  "note": "Scraped from https://doc.weixin.qq.com/mind/m4_AeUArAYSAH4CNBZS58tR4R369W6ZQ on 2026-05-20",
+  "source": "Tencent Docs Mind Map API - dop-api/mind/data/get",
+  "purpose": "Reverse-engineered API format for replicating mind map functionality",
+  "api_endpoint": "GET /dop-api/mind/data/get?id={docId}&xsrf={token}",
+  "auth": "Cookie-based (wedoc_sid, wedoc_skey, xsrf token)",
+  "save_mechanism": "OT-based collaborative protocol, triggered via wedoc/editnotify",
+  "data_structure": {
+    "retcode": 0,
+    "data": {
+      "collab_client_vars": {
+        "fileData": "JSON string (see below)",
+        "padId": "m4_AeUArAYSAH4CNBZS58tR4R369W6ZQ",
+        "padType": "mind",
+        "websocket": true,
+        "rev": 824,
+        "dver": "1.2.0"
+      }
+    }
+  },
+  "fileData_schema": {
+    "content": [{
+      "rootTopic": {
+        "id": "root",
+        "title": { "type": "document", "children": [{ "type": "paragraph", "children": [{ "type": "text", "text": "EE2", "color": "#1f1f1f" }] }] },
+        "collapse": false,
+        "children": {
+          "detached": [],
+          "attached": []
+        },
+        "style": { "color": "#1f1f1f" },
+        "extensions": { "structureClass.unbalanced": { "right-number": 6 } },
+        "structureClass": "unbalanced"
+      }
+    }],
+    "metaData": {}
+  }
+}

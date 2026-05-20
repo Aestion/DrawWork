@@ -1,0 +1,38 @@
+uid=1_0 RootWebArea "EE2" url="https://doc.weixin.qq.com/mind/m4_AeUArAYSAH4CNBZS58tR4R369W6ZQ?scode=ACEA4wcDAAoe3QqksJ&subId=BB08J2&mode=mind"
+  uid=1_1 textbox value="EE2"
+  uid=1_2 StaticText "提醒查阅"
+  uid=1_2 StaticText "10"
+  uid=1_3 generic "file" haspopup="menu"
+  uid=1_4 image "头像"
+  uid=1_5 toolbar "单栏" orientation="horizontal"
+    uid=1_6 button "大纲模式"
+    uid=1_7 button "撤销" disableable disabled
+    uid=1_8 button "重做" disableable disabled
+    uid=1_9 button "格式刷，双击可重复使用"
+    uid=1_10 button "插入" expandable haspopup="menu"
+    uid=1_11 button "添加上级主题" disableable disabled
+    uid=1_12 button "添加子主题"
+    uid=1_13 button "添加同级主题" disableable disabled
+    uid=1_14 button "添加关联线"
+    uid=1_15 button "添加概要" disableable disabled
+    uid=1_16 button "添加外框" disableable disabled
+    uid=1_17 button "结构" expandable haspopup="menu"
+    uid=1_18 button "主题" expandable haspopup="menu"
+    uid=1_19 button "格式"
+  uid=1_20 toolbar orientation="horizontal"
+    uid=1_21 button "查找替换"
+    uid=1_22 button
+  uid=1_23 generic
+    uid=1_24 textbox focusable focused
+    uid=1_25 generic
+      uid=1_26 button "取消"
+      uid=1_27 button "确定"
+  uid=1_28 banner
+  uid=1_29 StaticText "画布1"
+  uid=1_30 StaticText "主题"
+  uid=1_31 StaticText ": "
+  uid=1_32 StaticText "1/126"
+  uid=1_33 StaticText " "
+  uid=1_34 StaticText "最多150个"
+  uid=1_35 StaticText "100%"
+  uid=1_36 button "展开工具栏Ctrl+F1"
