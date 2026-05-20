@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, forwardRef, useCallback } from 'react'
 import { tencentToSimpleMindMap, simpleMindMapToTencent, DEFAULT_TENCENT_MIND } from '../../lib/tencent-mind-utils'
 import UnbalancedLayoutPlugin from '../../lib/unbalanced-layout-plugin'
+import { TENCENT_MARKER_ICONS } from '../../lib/marker-icons'
 import api from '../../lib/axios'
+import { useTencentMindYjs } from '../../hooks/useTencentMindYjs'
 
 const LAYOUTS = [
   { value: 'logicalStructure', label: '逻辑结构' },
@@ -92,38 +94,38 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const [linkMode, setLinkMode] = useState(false)
   const linkModeRef = useRef(false)
   const linkSourceRef = useRef(null)
+  const pluginsRegisteredRef = useRef(false)
+  const prevCanvasIdRef = useRef(canvasId)
+  const lastAppliedVersionRef = useRef(0)
 
-  // Load data from API
+  const {
+    tencentData: yjsTencentData,
+    loading: yjsLoading,
+    connected,
+    synced,
+    onlineCount,
+    remoteUpdateVersion,
+    syncToYjs
+  } = useTencentMindYjs({ canvasId, roomId, token: undefined, canEdit })
+
+  // Sync Yjs data to originDataRef (initial load and remote updates)
   useEffect(() => {
-    if (!isActive || !canvasId) return
+    if (!yjsTencentData) return
+    if (lastAppliedVersionRef.current === remoteUpdateVersion && originDataRef.current) return
+    originDataRef.current = yjsTencentData
+    lastAppliedVersionRef.current = remoteUpdateVersion
+    setLoading(false)
+  }, [yjsTencentData, remoteUpdateVersion])
 
-    let cancelled = false
-    setLoading(true)
-
-    const load = async () => {
-      try {
-        const res = await api.get(`/canvases/${canvasId}/tencentmind`)
-        if (cancelled) return
-
-        let tencentData
-        if (res.data?.data) {
-          tencentData = res.data.data
-        } else {
-          tencentData = DEFAULT_TENCENT_MIND
-        }
-        originDataRef.current = tencentData
-        setLoading(false)
-      } catch (err) {
-        if (cancelled) return
-        console.error('Failed to load tencent mind data:', err)
-        originDataRef.current = DEFAULT_TENCENT_MIND
-        setLoading(false)
-      }
+  // Handle canvas change
+  useEffect(() => {
+    if (prevCanvasIdRef.current !== canvasId) {
+      prevCanvasIdRef.current = canvasId
+      originDataRef.current = null
+      lastAppliedVersionRef.current = 0
+      setLoading(true)
     }
-
-    load()
-    return () => { cancelled = true }
-  }, [isActive, canvasId])
+  }, [canvasId])
 
   // Initialize simple-mind-map
   useEffect(() => {
@@ -168,10 +170,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     }
 
     const init = async () => {
-      const [MindMapModule, DragModule, AssociativeLineModule] = await Promise.all([
+      const [MindMapModule, DragModule, AssociativeLineModule, OuterFrameModule, RichTextModule, SelectModule] = await Promise.all([
         import('simple-mind-map'),
         import('simple-mind-map/src/plugins/Drag.js'),
-        import('simple-mind-map/src/plugins/AssociativeLine.js')
+        import('simple-mind-map/src/plugins/AssociativeLine.js'),
+        import('simple-mind-map/src/plugins/OuterFrame.js'),
+        import('simple-mind-map/src/plugins/RichText.js'),
+        import('simple-mind-map/src/plugins/Select.js')
       ])
       const MindMap = MindMapModule.default
       if (!mounted) return
@@ -245,9 +250,15 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         this.handleVerticalCheck(node, checkList)
       }
 
-      MindMap.usePlugin(DragClass)
-      MindMap.usePlugin(AssociativeLineModule.default || AssociativeLineModule)
-      MindMap.usePlugin(UnbalancedLayoutPlugin)
+      if (!MindMap._tencentPluginsRegistered) {
+        MindMap.usePlugin(DragClass)
+        MindMap.usePlugin(AssociativeLineModule.default || AssociativeLineModule)
+        MindMap.usePlugin(UnbalancedLayoutPlugin)
+        MindMap.usePlugin(OuterFrameModule.default || OuterFrameModule)
+        MindMap.usePlugin(RichTextModule.default || RichTextModule)
+        MindMap.usePlugin(SelectModule.default || SelectModule)
+        MindMap._tencentPluginsRegistered = true
+      }
 
       const smmData = tencentToSimpleMindMap(originDataRef.current)
       mindMap = new MindMap({
@@ -257,7 +268,9 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         theme: currentTheme,
         readonly,
         fit: true,
-        enableFreeDrag: false
+        enableFreeDrag: false,
+        useLeftKeySelectionRightKeyDrag: true,
+        iconList: TENCENT_MARKER_ICONS
       })
       mmRef.current = mindMap
 
@@ -335,6 +348,59 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         console.error('Failed to restore generalizations:', err)
       }
 
+      // Restore boundaries from _tencentMeta
+      try {
+        const restoreBoundaries = (parentNode) => {
+          const walk = (node) => {
+            const meta = node?.nodeData?.data?._tencentMeta
+            if (meta?.boundaries && meta.boundaries.length > 0 && node.children) {
+              for (const boundary of meta.boundaries) {
+                const [start, end] = boundary.range || [0, 0]
+                const targetChildren = node.children.slice(start, end + 1)
+                if (targetChildren.length > 0) {
+                  mindMap.renderer.setActiveNodeList(targetChildren)
+                  mindMap.execCommand('ADD_OUTER_FRAME', null, {
+                    strokeColor: '#0984e3',
+                    fill: 'rgba(9,132,227,0.05)',
+                    radius: 5,
+                    strokeWidth: 2,
+                    strokeDasharray: '0'
+                  })
+                }
+              }
+            }
+            if (node.children) node.children.forEach(walk)
+          }
+          walk(parentNode)
+        }
+        restoreBoundaries(mindMap.renderer.renderTree)
+      } catch (err) {
+        console.error('Failed to restore boundaries:', err)
+      }
+
+      // Restore markers from _tencentMeta
+      try {
+        const restoreMarkers = (parentNode) => {
+          const walk = (node) => {
+            const meta = node?.nodeData?.data?._tencentMeta
+            if (meta?.markers?.length) {
+              const iconKeys = meta.markers.map(m => {
+                if (m.markerId === 'symbol-question') return 'tencent_question'
+                return null
+              }).filter(Boolean)
+              if (iconKeys.length) {
+                node.setIcon(iconKeys)
+              }
+            }
+            if (node.children) node.children.forEach(walk)
+          }
+          walk(parentNode)
+        }
+        restoreMarkers(mindMap.renderer.renderTree)
+      } catch (err) {
+        console.error('Failed to restore markers:', err)
+      }
+
       // Listen for data changes to auto-save
       mindMap.on('data_change', () => {
         clearTimeout(saveTimerRef.current)
@@ -343,7 +409,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         }, 2000)
       })
 
-      onConnectionChange?.({ connected: true, synced: true, label: 'synced', onlineCount: 1 }, canvasId)
+      // onConnectionChange is handled by a reactive effect below
     }
 
     init()
@@ -358,7 +424,18 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         mmRef.current = null
       }
     }
-  }, [isActive, loading]) // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, loading, remoteUpdateVersion])
+
+  // Report real connection status via onConnectionChange
+  useEffect(() => {
+    if (loading || !canvasId) return
+    let label
+    if (!connected) label = 'disconnected'
+    else if (!synced) label = 'syncing'
+    else label = 'synced'
+    onConnectionChange?.({ connected, synced, label, onlineCount }, canvasId)
+  }, [connected, synced, onlineCount, loading, readonly, canvasId, onConnectionChange])
 
   // Update readonly mode
   useEffect(() => {
@@ -395,6 +472,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       tencentData.relationships = relationships
 
       originDataRef.current = tencentData
+      syncToYjs(tencentData)
       await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
@@ -563,6 +641,42 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
           title="删除选中的概要节点"
         >
           删除概要
+        </button>
+
+        <button
+          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          onClick={() => mmRef.current?.execCommand('ADD_OUTER_FRAME', null, { strokeColor: '#0984e3', fill: 'rgba(9,132,227,0.05)' })}
+          disabled={!canEdit || readonly}
+          title="为选中节点添加外框"
+        >
+          添加外框
+        </button>
+        <button
+          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          onClick={() => mmRef.current?.outerFrame?.removeActiveOuterFrame()}
+          disabled={!canEdit || readonly}
+          title="删除选中的外框"
+        >
+          删除外框
+        </button>
+
+        <button
+          className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50"
+          onClick={() => {
+            const activeNode = activeNodeRef.current
+            if (!activeNode || !mmRef.current) return
+            const currentIcons = activeNode.getData('icon') || []
+            if (currentIcons.includes('tencent_question')) {
+              activeNode.setIcon([])
+            } else {
+              activeNode.setIcon(['tencent_question'])
+            }
+            mmRef.current.emit('data_change')
+          }}
+          disabled={!canEdit || readonly}
+          title="切换标记图标（问号）"
+        >
+          标记
         </button>
 
         <div className="w-px h-4 bg-gray-300 mx-1" />
