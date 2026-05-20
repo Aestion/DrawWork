@@ -98,6 +98,8 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const pluginsRegisteredRef = useRef(false)
   const prevCanvasIdRef = useRef(canvasId)
   const lastAppliedVersionRef = useRef(0)
+  const saveDataRef = useRef(null)
+  saveDataRef.current = saveData
 
   // Get auth token from store (consistent with MindMapEditor)
   const token = useAuthStore((state) => state.token)
@@ -139,11 +141,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
 
     const restoreNodeMedia = async (mindMap) => {
       const walk = async (node) => {
+        if (!mounted) return
         if (node.nodeData?.data?._uploadId) {
           const uploadId = node.nodeData.data._uploadId
           const mediaType = node.nodeData.data._mediaType
           try {
             const blobRes = await api.get(`/upload/${uploadId}`, { responseType: 'blob' })
+            if (!mounted) return
             const blobUrl = URL.createObjectURL(blobRes.data)
             blobUrlsRef.current.add(blobUrl)
             if (mediaType === 'video') {
@@ -167,11 +171,17 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         }
       }
       await walk(mindMap.renderer.renderTree)
+      if (!mounted) return
       // Re-render to create SVG <image> elements for placeholders
       mindMap.render(() => {
         injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
       })
     }
+
+    // Clear stale blob URLs from previous init (e.g. on remoteUpdateVersion change)
+    blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
+    blobUrlsRef.current.clear()
+    pendingVideoBlobsRef.current.clear()
 
     const init = async () => {
       const [MindMapModule, DragModule, AssociativeLineModule, OuterFrameModule, RichTextModule, SelectModule] = await Promise.all([
@@ -409,7 +419,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       mindMap.on('data_change', () => {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = setTimeout(() => {
-          saveData()
+          saveDataRef.current?.()
         }, 2000)
       })
 
@@ -476,12 +486,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       tencentData.relationships = relationships
 
       originDataRef.current = tencentData
+      tencentDataRef.current = tencentData
       syncToYjs(tencentData)
       await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
     }
-  }, [canvasId])
+  }, [canvasId, syncToYjs])
 
   const addSiblingNode = useCallback(() => {
     mmRef.current?.execCommand('INSERT_NODE')

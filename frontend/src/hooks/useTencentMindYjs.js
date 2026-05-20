@@ -115,39 +115,13 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
 
     const loadData = async () => {
       try {
-        // Tier 1: localStorage backup
-        const backupKey = 'drawwork_tm_backup_' + canvasId
-        const backupJson = localStorage.getItem(backupKey)
-        if (backupJson) {
-          try {
-            const backup = JSON.parse(backupJson)
-            if (backup?.rootTopic) {
-              setTencentData(backup)
-              initialDataLoaded.current = true
-              if (fallbackTimeoutRef.current) {
-                clearTimeout(fallbackTimeoutRef.current)
-                fallbackTimeoutRef.current = null
-              }
-              setLoading(false)
-              tencentDataRef.current = backup
-              syncToYjs(backup)
-              // Background save to API
-              api.put(`/canvases/${canvasId}/tencentmind`, { data: backup }).catch(() => {})
-              // Clean up backup after confirmed save
-              setTimeout(() => {
-                try { localStorage.removeItem(backupKey) } catch (e) {}
-              }, 5000)
-              return
-            }
-          } catch (e) { /* corrupt backup */ }
-        }
-
-        // Tier 2: Yjs data from peers
+        // Tier 1: Yjs data from peers (most recent, CRDT-merged)
         const yjsData = extractTencentData(yMap)
         if (yjsData && yjsData.rootTopic) {
           setTencentData(yjsData)
+          tencentDataRef.current = yjsData
         } else {
-          // Tier 3: HTTP API
+          // Tier 2: HTTP API
           try {
             const res = await api.get(`/canvases/${canvasId}/tencentmind`)
             const data = res.data?.data || DEFAULT_TENCENT_MIND
@@ -155,10 +129,35 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
             tencentDataRef.current = data
             syncToYjs(data)
           } catch {
-            // Tier 4: default
-            setTencentData(DEFAULT_TENCENT_MIND)
-            tencentDataRef.current = DEFAULT_TENCENT_MIND
-            syncToYjs(DEFAULT_TENCENT_MIND)
+            // Tier 3: localStorage backup (last resort before default)
+            const backupKey = 'drawwork_tm_backup_' + canvasId
+            const backupJson = localStorage.getItem(backupKey)
+            if (backupJson) {
+              try {
+                const backup = JSON.parse(backupJson)
+                if (backup?.rootTopic) {
+                  setTencentData(backup)
+                  tencentDataRef.current = backup
+                  syncToYjs(backup)
+                  api.put(`/canvases/${canvasId}/tencentmind`, { data: backup }).catch(() => {})
+                  setTimeout(() => {
+                    try { localStorage.removeItem(backupKey) } catch (e) {}
+                  }, 5000)
+                } else {
+                  throw new Error('invalid backup')
+                }
+              } catch (e) {
+                // corrupt backup, fall through to default
+                setTencentData(DEFAULT_TENCENT_MIND)
+                tencentDataRef.current = DEFAULT_TENCENT_MIND
+                syncToYjs(DEFAULT_TENCENT_MIND)
+              }
+            } else {
+              // Tier 4: default
+              setTencentData(DEFAULT_TENCENT_MIND)
+              tencentDataRef.current = DEFAULT_TENCENT_MIND
+              syncToYjs(DEFAULT_TENCENT_MIND)
+            }
           }
         }
 
