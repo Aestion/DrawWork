@@ -97,6 +97,8 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
         } catch (err) {
           console.error('[useTencentMindYjs] Fallback load failed:', err)
           setError(err.message)
+          setTencentData(DEFAULT_TENCENT_MIND)
+          tencentDataRef.current = DEFAULT_TENCENT_MIND
           setLoading(false)
         }
       }

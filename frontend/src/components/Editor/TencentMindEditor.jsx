@@ -4,6 +4,7 @@ import UnbalancedLayoutPlugin from '../../lib/unbalanced-layout-plugin'
 import { TENCENT_MARKER_ICONS } from '../../lib/marker-icons'
 import api from '../../lib/axios'
 import { useTencentMindYjs } from '../../hooks/useTencentMindYjs'
+import { useAuthStore } from '../../stores/authStore'
 
 const LAYOUTS = [
   { value: 'logicalStructure', label: '逻辑结构' },
@@ -98,6 +99,9 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const prevCanvasIdRef = useRef(canvasId)
   const lastAppliedVersionRef = useRef(0)
 
+  // Get auth token from store (consistent with MindMapEditor)
+  const token = useAuthStore((state) => state.token)
+
   const {
     tencentData: yjsTencentData,
     loading: yjsLoading,
@@ -106,7 +110,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     onlineCount,
     remoteUpdateVersion,
     syncToYjs
-  } = useTencentMindYjs({ canvasId, roomId, token: undefined, canEdit })
+  } = useTencentMindYjs({ canvasId, roomId, token, canEdit })
 
   // Sync Yjs data to originDataRef (initial load and remote updates)
   useEffect(() => {
