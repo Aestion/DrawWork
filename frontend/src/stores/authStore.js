@@ -26,7 +26,9 @@ export const useAuthStore = create((set, get) => ({
     set({ isLoading: true })
     try {
       const res = await api.get('/auth/me')
-      set({ user: res.data, isLoading: false })
+      // Re-read token from localStorage in case the axios interceptor refreshed it
+      const currentToken = getToken()
+      set({ user: res.data, token: currentToken, isLoading: false })
     } catch (err) {
       // Try token refresh on 401
       if (err.response?.status === 401) {

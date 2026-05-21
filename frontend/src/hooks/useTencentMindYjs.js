@@ -38,9 +38,13 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   const syncToYjs = useCallback((data) => {
     if (!yMap || !canEdit) return
     try {
+      const before = yMap.get('__tencent_state')
+      const beforeSize = before ? JSON.stringify(before.toJSON ? before.toJSON() : before).length : 0
       yMap.doc.transact(() => {
         yMap.set('__tencent_state', data)
       }, 'local-tencentmind-change')
+      const afterSize = JSON.stringify(data).length
+      console.log('[YJS-SYNC] Data written to Y.Map via syncToYjs, size:', beforeSize, '→', afterSize, 'bytes, hasRootTopic:', !!data?.rootTopic)
     } catch (err) {
       console.error('[useTencentMindYjs] Failed to sync to Yjs:', err)
     }
@@ -51,13 +55,23 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
     if (!yMap) return
 
     const observer = (event) => {
-      if (event.transaction?.origin === 'local-tencentmind-change') return
-      const data = yMap.get('__tencent_state')
-      if (!data) return
+      const isLocal = event.transaction?.origin === 'local-tencentmind-change'
+      if (isLocal) return
+      const raw = yMap.get('__tencent_state')
+      if (!raw) {
+        console.warn('[YJS-OBS] observer fired but __tencent_state is null/undefined')
+        return
+      }
+      // yMap.get() returns a Y.Map for nested objects — convert to plain object
+      const data = typeof raw.toJSON === 'function' ? raw.toJSON() : raw
+      const dataSize = JSON.stringify(data).length
+      console.log('[YJS-OBS] REMOTE update received, size:', dataSize, 'hasRootTopic:', !!data?.rootTopic, 'rootTopicKeys:', Object.keys(data?.rootTopic || {}).join(','), 'origin:', typeof event.transaction?.origin)
 
+      // Don't set initialDataLoaded.current or setLoading(false) here.
+      // The HTTP primary loader is the source of truth and must run first.
+      // Yjs may have stale data from a previous session's auto-save that ran
+      // before restoration completed, causing permanent data loss.
       setTencentData(data)
-      initialDataLoaded.current = true
-      setLoading(false)
 
       // Defer version increment so React processes the state first
       Promise.resolve().then(() => {
@@ -82,23 +96,33 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
 
       const loadFromHttp = async () => {
         try {
-          const existingData = yMapRef.current?.get('__tencent_state')
-          if (existingData) {
-            setTencentData(existingData)
-          } else {
-            const res = await api.get(`/canvases/${canvasId}/tencentmind`)
-            const data = res.data?.data || DEFAULT_TENCENT_MIND
-            setTencentData(data)
-            tencentDataRef.current = data
-            syncToYjs(data)
-          }
+          // HTTP API is the source of truth — always fetch from it.
+          // The YMap shortcut was removed because Yjs may have stale
+          // data from a previous session that lacks boundaries.
+          const res = await api.get(`/canvases/${canvasId}/tencentmind`)
+          const data = res.data?.data || DEFAULT_TENCENT_MIND
+          setTencentData(data)
+          tencentDataRef.current = data
+          syncToYjs(data)
+          Promise.resolve().then(() => {
+            setRemoteUpdateVersion((v) => v + 1)
+          })
           initialDataLoaded.current = true
           setLoading(false)
         } catch (err) {
-          console.error('[useTencentMindYjs] Fallback load failed:', err)
+          console.error('[useTencentMindYjs] Fallback HTTP failed, trying YMap:', err)
+          // YMap data as fallback when HTTP fails
+          const existingData = yMapRef.current?.get('__tencent_state')
+          if (existingData) {
+            setTencentData(existingData)
+            tencentDataRef.current = existingData
+          } else {
+            setTencentData(DEFAULT_TENCENT_MIND)
+            tencentDataRef.current = DEFAULT_TENCENT_MIND
+            syncToYjs(DEFAULT_TENCENT_MIND)
+          }
           setError(err.message)
-          setTencentData(DEFAULT_TENCENT_MIND)
-          tencentDataRef.current = DEFAULT_TENCENT_MIND
+          initialDataLoaded.current = true
           setLoading(false)
         }
       }
@@ -115,21 +139,27 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
 
     const loadData = async () => {
       try {
-        // Tier 1: Yjs data from peers (most recent, CRDT-merged)
-        const yjsData = extractTencentData(yMap)
-        if (yjsData && yjsData.rootTopic) {
-          setTencentData(yjsData)
-          tencentDataRef.current = yjsData
-        } else {
-          // Tier 2: HTTP API
-          try {
-            const res = await api.get(`/canvases/${canvasId}/tencentmind`)
-            const data = res.data?.data || DEFAULT_TENCENT_MIND
-            setTencentData(data)
-            tencentDataRef.current = data
-            syncToYjs(data)
-          } catch {
-            // Tier 3: localStorage backup (last resort before default)
+        // Tier 1: HTTP API (source of truth for persistence)
+        try {
+          const res = await api.get(`/canvases/${canvasId}/tencentmind`)
+          const data = res.data?.data || DEFAULT_TENCENT_MIND
+          setTencentData(data)
+          tencentDataRef.current = data
+          // Seed Yjs with HTTP data so peers get the full state
+          syncToYjs(data)
+          // Increment version so the editor picks up this authoritative data
+          // even if the Yjs observer already set stale data previously.
+          Promise.resolve().then(() => {
+            setRemoteUpdateVersion((v) => v + 1)
+          })
+        } catch {
+          // Tier 2: Yjs data from peers (fallback when HTTP fails)
+          const yjsData = extractTencentData(yMap)
+          if (yjsData && yjsData.rootTopic) {
+            setTencentData(yjsData)
+            tencentDataRef.current = yjsData
+          } else {
+            // Tier 3: localStorage backup
             const backupKey = 'drawwork_tm_backup_' + canvasId
             const backupJson = localStorage.getItem(backupKey)
             if (backupJson) {
@@ -147,7 +177,6 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
                   throw new Error('invalid backup')
                 }
               } catch (e) {
-                // corrupt backup, fall through to default
                 setTencentData(DEFAULT_TENCENT_MIND)
                 tencentDataRef.current = DEFAULT_TENCENT_MIND
                 syncToYjs(DEFAULT_TENCENT_MIND)

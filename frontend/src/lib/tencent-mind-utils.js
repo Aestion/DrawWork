@@ -239,13 +239,36 @@ function convertBack(smmNode, origMeta) {
   if (smmNode.children) {
     const numGen = generalization ? generalization.length : 0
     const regularCount = smmNode.children.length - numGen
+    const boundaryMap = {}
+
     smmNode.children.forEach((c, i) => {
+      // Collect outerFrame data for boundary reconstruction
+      // (boundaries are stored as outerFrame on each child within a group)
+      const outerFrame = c.data?.outerFrame
+      if (outerFrame?.groupId) {
+        if (!boundaryMap[outerFrame.groupId]) {
+          const { groupId, ...style } = outerFrame
+          boundaryMap[outerFrame.groupId] = { range: [i, i], ...style }
+        } else {
+          boundaryMap[outerFrame.groupId].range[1] = i
+        }
+      }
+
       if (i < regularCount) {
         const childMeta = c.data?._tencentMeta || (origMeta?.children?.[i])
         children.push(convertBack(c, childMeta))
       }
       // generalization children (i >= regularCount) are skipped
     })
+
+    // Reconstruct boundaries from current outerFrame data, not stale _tencentMeta
+    const reconstructed = Object.values(boundaryMap)
+    if (reconstructed.length > 0) {
+      meta.boundaries = reconstructed
+    }
+    // Do NOT delete meta.boundaries when no outerFrame on children.
+    // During initial hydration, restoreBoundaries may not have run yet,
+    // so deleting here causes permanent data loss on auto-save.
   }
 
   const node = rebuildNode(text, meta, children)
@@ -298,6 +321,27 @@ export function simpleMindMapToTencent(smmData, origTencentData) {
     ? smmData.children.map(c => convertBack(c, null))
     : []
 
+  // Reconstruct boundaries at root level from children's outerFrame data
+  if (smmData.children) {
+    const rootBoundaryMap = {}
+    smmData.children.forEach((c, i) => {
+      const outerFrame = c.data?.outerFrame
+      if (outerFrame?.groupId) {
+        if (!rootBoundaryMap[outerFrame.groupId]) {
+          const { groupId, ...style } = outerFrame
+          rootBoundaryMap[outerFrame.groupId] = { range: [i, i], ...style }
+        } else {
+          rootBoundaryMap[outerFrame.groupId].range[1] = i
+        }
+      }
+    })
+    const rootBoundaries = Object.values(rootBoundaryMap)
+    if (rootBoundaries.length > 0) {
+      rootMeta.boundaries = rootBoundaries
+    }
+    // Same as above: preserve existing boundaries during init hydration
+  }
+
   const rootTopic = rebuildNode(smmData.data?.text || '', rootMeta, children)
 
   // Inject root media data
@@ -307,6 +351,13 @@ export function simpleMindMapToTencent(smmData, origTencentData) {
     const imageSize = smmData.data?._imageSize
     rootTopic.extensions = rootTopic.extensions || {}
     rootTopic.extensions['drawwork.media'] = { uploadId: rootUploadId, mediaType, ...(imageSize ? { imageSize } : {}) }
+  }
+
+  // Preserve root-level generalization data (smmData is the root, not processed by convertBack)
+  const rootGen = smmData.data?.generalization
+  if (rootGen && rootGen.length > 0) {
+    rootTopic.extensions = rootTopic.extensions || {}
+    rootTopic.extensions['drawwork.generalization'] = rootGen
   }
 
   // Preserve top-level structures

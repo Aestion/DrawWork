@@ -119,12 +119,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
 
   // Sync Yjs data to originDataRef (initial load and remote updates)
   useEffect(() => {
-    if (!yjsTencentData) return
+    if (!yjsTencentData || yjsLoading) return
     if (lastAppliedVersionRef.current === remoteUpdateVersion && originDataRef.current) return
+    console.log('[YJS-EDITOR] Applying Yjs data, version:', remoteUpdateVersion, 'hasBoundaries:', !!yjsTencentData?.rootTopic?.boundaries, 'generations:', !!yjsTencentData?.rootTopic?.extensions?.['drawwork.generalization'], 'relationships:', yjsTencentData?.relationships?.length)
     originDataRef.current = yjsTencentData
     lastAppliedVersionRef.current = remoteUpdateVersion
     setLoading(false)
-  }, [yjsTencentData, remoteUpdateVersion])
+  }, [yjsTencentData, remoteUpdateVersion, yjsLoading])
 
   // Handle canvas change
   useEffect(() => {
@@ -280,7 +281,8 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         MindMap._tencentPluginsRegistered = true
       }
 
-      const smmData = tencentToSimpleMindMap(originDataRef.current)
+      const rawData = originDataRef.current
+      const smmData = tencentToSimpleMindMap(rawData)
       mindMap = new MindMap({
         el: containerRef.current,
         data: smmData,
@@ -297,6 +299,10 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       // Right-click context menu (library emits node_contextmenu on node groups)
       mindMap.on('node_contextmenu', (e, node) => {
         contextNodeRef.current = node
+        // Set as active node so execCommand with null appointNodes applies to this node
+        if (mmRef.current?.renderer) {
+          mmRef.current.renderer.activeNodeList = Array.isArray(node) ? node : [node]
+        }
         setContextMenuRef.current({ x: e.clientX, y: e.clientY, node })
       })
       document.addEventListener('keydown', onKeyDown)
@@ -316,117 +322,180 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             linkSourceRef.current = n
           } else if (n !== linkSourceRef.current) {
             mmRef.current?.associativeLine?.addLine(linkSourceRef.current, n)
+            mmRef.current?.emit('data_change')
             linkSourceRef.current = null
             linkModeRef.current = false
             setLinkMode(false)
           }
         }
       })
-      mindMap.on('node_tree_render_end', () => {
+      // Run restoration after async layout/render completes
+      const onFirstRender = () => {
+        mindMap.off('node_tree_render_end', onFirstRender)
+
         injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
-      })
-      restoreNodeMedia(mindMap).catch(console.error)
+        restoreNodeMedia(mindMap).catch(console.error)
 
-      // Restore associative lines from Tencent relationships
-      const relationships = originDataRef.current?.relationships || []
-      if (relationships.length > 0) {
-        const buildNodeIdMap = (node) => {
-          const map = new Map()
-          const walk = (n) => {
-            const id = n?.nodeData?.data?._tencentMeta?.id
-            if (id) map.set(id, n)
-            if (n.children) n.children.forEach(walk)
-          }
-          walk(node)
-          return map
-        }
-        const nodeMap = buildNodeIdMap(mindMap.renderer.renderTree)
-        for (const rel of relationships) {
-          const fromNode = nodeMap.get(rel.end1Id)
-          const toNode = nodeMap.get(rel.end2Id)
-          if (fromNode && toNode) {
-            mindMap.associativeLine?.addLine(fromNode, toNode)
-          }
-        }
-      }
-
-      // Restore generalizations from extensions
-      try {
-        const restoreGeneralizations = (parentNode) => {
-          const walk = (node) => {
-            const meta = node?.nodeData?.data?._tencentMeta
-            const genData = meta?.extensions?.['drawwork.generalization']
-            if (genData && genData.length > 0 && node.children) {
-              const range = genData[0].range
-              if (range) {
-                const targetChildren = node.children.slice(range[0], range[1] + 1)
-                if (targetChildren.length > 0) {
-                  mindMap.renderer.setActiveNodeList(targetChildren)
-                  mindMap.execCommand('ADD_GENERALIZATION', { text: genData[0].text || '概要' })
+        // Restore associative lines from Tencent relationships
+        try {
+          const relationships = originDataRef.current?.relationships || []
+          if (relationships.length > 0) {
+            // After layout, render tree data nodes have ._node pointing to Node instances.
+            // Walk the render tree using ._node to find nodes by their tencent ID.
+            const buildNodeIdMap = (dataNode) => {
+              const map = new Map()
+              const walk = (n) => {
+                const node = n._node || n
+                const id = node?.nodeData?.data?._tencentMeta?.id
+                if (id) map.set(id, node)
+                if (n.children) n.children.forEach(c => walk(c))
+              }
+              walk(dataNode)
+              return map
+            }
+            const nodeMap = buildNodeIdMap(mindMap.renderer.renderTree)
+            for (const rel of relationships) {
+              const fromNode = nodeMap.get(rel.end1Id)
+              const toNode = nodeMap.get(rel.end2Id)
+              if (fromNode && toNode) {
+                mindMap.associativeLine?.addLine(fromNode, toNode)
+                // Restore custom bezier control points if saved
+                if (rel.controlPoints && Object.keys(rel.controlPoints).length > 0) {
+                  try {
+                    const toUid = toNode.getData('uid')
+                    const targets = fromNode.getData('associativeLineTargets') || []
+                    const idx = targets.indexOf(toUid)
+                    if (idx >= 0) {
+                      const sp = rel.lineEndPoints?.["0"] || {}
+                      const ep = rel.lineEndPoints?.["1"] || {}
+                      const cp0 = rel.controlPoints["0"] || {}
+                      const cp1 = rel.controlPoints["1"] || {}
+                      const offsets = [
+                        { x: (cp0.x || 0) - (sp.x || 0), y: (cp0.y || 0) - (sp.y || 0) },
+                        { x: (cp1.x || 0) - (ep.x || 0), y: (cp1.y || 0) - (ep.y || 0) }
+                      ]
+                      const allOffsets = fromNode.getData('associativeLineTargetControlOffsets') || []
+                      allOffsets[idx] = offsets
+                      fromNode.setData('associativeLineTargetControlOffsets', allOffsets)
+                      const allPoints = fromNode.getData('associativeLinePoint') || []
+                      allPoints[idx] = { startPoint: sp, endPoint: ep }
+                      fromNode.setData('associativeLinePoint', allPoints)
+                    }
+                  } catch (e) {
+                    console.error('Failed to restore control points:', e)
+                  }
+                }
+                // Restore line style if saved
+                if (rel.style && rel.style.lineColor) {
+                  try {
+                    const toUid = toNode.getData('uid')
+                    const allStyles = fromNode.getData('associativeLineStyle') || {}
+                    allStyles[toUid] = {
+                      associativeLineColor: rel.style.lineColor,
+                      ...(rel.style.lineWidth != null ? { associativeLineWidth: rel.style.lineWidth } : {}),
+                      ...(rel.style.lineDasharray != null ? { associativeLineDasharray: rel.style.lineDasharray } : {})
+                    }
+                    fromNode.setData('associativeLineStyle', allStyles)
+                  } catch (e) {
+                    console.error('Failed to restore line style:', e)
+                  }
                 }
               }
             }
-            if (node.children) node.children.forEach(walk)
           }
-          walk(parentNode)
+        } catch (err) {
+          console.error('Failed to restore associative lines:', err)
         }
-        restoreGeneralizations(mindMap.renderer.renderTree)
-      } catch (err) {
-        console.error('Failed to restore generalizations:', err)
-      }
 
-      // Restore boundaries from _tencentMeta
-      try {
-        const restoreBoundaries = (parentNode) => {
-          const walk = (node) => {
-            const meta = node?.nodeData?.data?._tencentMeta
-            if (meta?.boundaries && meta.boundaries.length > 0 && node.children) {
-              for (const boundary of meta.boundaries) {
-                const [start, end] = boundary.range || [0, 0]
-                const targetChildren = node.children.slice(start, end + 1)
-                if (targetChildren.length > 0) {
-                  mindMap.renderer.setActiveNodeList(targetChildren)
+        // Restore generalizations from extensions
+        try {
+          const restoreGeneralizations = (parentNode) => {
+            const walk = (node, depth = 0) => {
+              const mn = node._node || node
+              const meta = mn?.nodeData?.data?._tencentMeta
+              const genData = meta?.extensions?.['drawwork.generalization']
+              if (genData && genData.length > 0) {
+                const range = genData[0].range
+                if (range && mn.children) {
+                  const targetChildren = mn.children.slice(range[0], range[1] + 1)
+                  const nodeInstances = targetChildren.map(n => n._node).filter(Boolean)
+                  if (nodeInstances.length > 0) {
+                    mindMap.renderer.activeNodeList = nodeInstances
+                    mindMap.execCommand('ADD_GENERALIZATION', { text: genData[0].text || '概要' })
+                  }
+                } else if (!range) {
+                  try {
+                    mindMap.execCommand('SET_NODE_DATA', mn, { generalization: genData })
+                  } catch (e) {
+                    console.error('Failed to restore self-generalization:', e)
+                  }
+                }
+              }
+              if (node.children) node.children.forEach(c => walk(c, depth + 1))
+            }
+            walk(parentNode, 0)
+            mindMap.render()
+          }
+          restoreGeneralizations(mindMap.renderer.renderTree)
+        } catch (err) {
+          console.error('Failed to restore generalizations:', err)
+        }
+
+        // Restore boundaries from originDataRef.rootTopic.boundaries
+        try {
+          const boundaryList = originDataRef.current?.rootTopic?.boundaries
+          const rootChildren = mindMap.renderer.renderTree?.children
+          if (boundaryList && boundaryList.length > 0 && rootChildren) {
+            for (const boundary of boundaryList) {
+              const [start, end] = boundary.range || [0, 0]
+              const targetChildren = rootChildren.slice(start, end + 1)
+              if (targetChildren.length > 0) {
+                // Map data tree nodes to Node instances via ._node
+                const nodeInstances = targetChildren.map(n => n._node).filter(Boolean)
+                if (nodeInstances.length > 0) {
+                  mindMap.renderer.activeNodeList = nodeInstances
                   mindMap.execCommand('ADD_OUTER_FRAME', null, {
-                    strokeColor: '#0984e3',
-                    fill: 'rgba(9,132,227,0.05)',
-                    radius: 5,
-                    strokeWidth: 2,
-                    strokeDasharray: '0'
+                    strokeColor: boundary.strokeColor || '#0984e3',
+                    fill: boundary.fill || 'rgba(9,132,227,0.05)',
+                    radius: boundary.radius || 5,
+                    strokeWidth: boundary.strokeWidth || 2,
+                    strokeDasharray: boundary.strokeDasharray || '0'
                   })
                 }
               }
             }
-            if (node.children) node.children.forEach(walk)
           }
-          walk(parentNode)
+        } catch (err) {
+          console.error('Failed to restore boundaries:', err)
         }
-        restoreBoundaries(mindMap.renderer.renderTree)
-      } catch (err) {
-        console.error('Failed to restore boundaries:', err)
-      }
 
-      // Restore markers from _tencentMeta
-      try {
-        const restoreMarkers = (parentNode) => {
-          const walk = (node) => {
-            const meta = node?.nodeData?.data?._tencentMeta
-            if (meta?.markers?.length) {
-              const iconKeys = meta.markers.map(m => {
-                if (m.markerId === 'symbol-question') return 'tencent_question'
-                return null
-              }).filter(Boolean)
-              if (iconKeys.length) {
-                node.setIcon(iconKeys)
+        // Restore markers from _tencentMeta
+        try {
+          const restoreMarkers = (parentNode) => {
+            const walk = (node) => {
+              const mn = node._node || node
+              const meta = mn?.nodeData?.data?._tencentMeta
+              if (meta?.markers?.length) {
+                const iconKeys = meta.markers.map(m => {
+                  if (m.markerId === 'symbol-question') return 'tencent_question'
+                  return null
+                }).filter(Boolean)
+                if (iconKeys.length) {
+                  mn.setIcon(iconKeys)
+                }
               }
+              if (node.children) node.children.forEach(walk)
             }
-            if (node.children) node.children.forEach(walk)
+            walk(parentNode)
           }
-          walk(parentNode)
+          restoreMarkers(mindMap.renderer.renderTree)
+        } catch (err) {
+          console.error('Failed to restore markers:', err)
         }
-        restoreMarkers(mindMap.renderer.renderTree)
-      } catch (err) {
-        console.error('Failed to restore markers:', err)
+
+        mindMap.emit('data_change')
       }
+      mindMap.on('node_tree_render_end', onFirstRender)
 
       // Listen for data changes to auto-save
       mindMap.on('data_change', () => {
@@ -472,7 +541,9 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
 
   // Save data to API
   const saveData = useCallback(async () => {
-    if (!originDataRef.current || !mmRef.current) return
+    if (!originDataRef.current || !mmRef.current) {
+      return
+    }
     try {
       const currentData = mmRef.current.getData()
       const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
@@ -486,22 +557,64 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         const fromId = fromNode?.nodeData?.data?._tencentMeta?.id
         const toId = toNode?.nodeData?.data?._tencentMeta?.id
         if (fromId && toId) {
+          // Capture bezier control points, endpoints, and style from node data
+          const fromUid = fromNode.getData?.('uid')
+          const toUid = toNode.getData?.('uid')
+          const targets = fromNode.getData?.('associativeLineTargets') || []
+          const targetIndex = targets.indexOf(toUid)
+
+          let controlPoints = {}
+          let lineEndPoints = {}
+          let lineStyle = { lineColor: '#319B62' }
+
+          if (targetIndex >= 0) {
+            const allOffsets = fromNode.getData?.('associativeLineTargetControlOffsets') || []
+            const allPoints = fromNode.getData?.('associativeLinePoint') || []
+            const offsets = allOffsets[targetIndex]
+            const points = allPoints[targetIndex]
+
+            if (offsets && points) {
+              const sp = points.startPoint || {}
+              const ep = points.endPoint || {}
+              controlPoints = {
+                "0": { x: (sp.x || 0) + (offsets[0]?.x || 0), y: (sp.y || 0) + (offsets[0]?.y || 0) },
+                "1": { x: (ep.x || 0) + (offsets[1]?.x || 0), y: (ep.y || 0) + (offsets[1]?.y || 0) }
+              }
+              lineEndPoints = {
+                "0": { x: sp.x || 0, y: sp.y || 0 },
+                "1": { x: ep.x || 0, y: ep.y || 0 }
+              }
+            }
+
+            const allStyles = fromNode.getData?.('associativeLineStyle') || {}
+            const perLineStyle = allStyles[toUid]
+            if (perLineStyle) {
+              lineStyle = {
+                lineColor: perLineStyle.associativeLineColor || '#319B62',
+                ...(perLineStyle.associativeLineWidth != null ? { lineWidth: perLineStyle.associativeLineWidth } : {}),
+                ...(perLineStyle.associativeLineDasharray != null ? { lineDasharray: perLineStyle.associativeLineDasharray } : {})
+              }
+            }
+          }
+
           relationships.push({
             id: `line_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             end1Id: fromId,
             end2Id: toId,
             title: '',
-            controlPoints: {},
-            lineEndPoints: {},
-            style: { lineColor: '#319B62' }
+            controlPoints,
+            lineEndPoints,
+            style: lineStyle
           })
         }
       }
       tencentData.relationships = relationships
 
       originDataRef.current = tencentData
+      console.log('[YJS-SAVE] Calling syncToYjs, data size:', JSON.stringify(tencentData).length, 'relationships:', relationships.length, 'hasRootTopic:', !!tencentData?.rootTopic)
       syncToYjs(tencentData)
       await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
+      console.log('[YJS-SAVE] API save complete')
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
     }
@@ -624,6 +737,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     }
 
     mm.execCommand('REMOVE_GENERALIZATION')
+    mm.emit('data_change')
   }, [])
 
   if (loading) {
@@ -711,7 +825,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             <ContextMenuDivider />
 
             <ContextMenuItem
-              onClick={() => { mmRef.current?.execCommand('ADD_GENERALIZATION'); setContextMenu(null) }}
+              onClick={() => { mmRef.current?.execCommand('ADD_GENERALIZATION'); mmRef.current?.emit('data_change'); setContextMenu(null) }}
               disabled={contextMenu.node.isRoot}
             >
               添加概要
@@ -722,10 +836,19 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             >
               删除概要
             </ContextMenuItem>
-            <ContextMenuItem onClick={() => { mmRef.current?.execCommand('ADD_OUTER_FRAME', null, { strokeColor: '#0984e3', fill: 'rgba(9,132,227,0.05)' }); setContextMenu(null) }}>
+            <ContextMenuItem
+              onClick={() => {
+                const mm = mmRef.current
+                if (!mm) return
+                mm.execCommand('ADD_OUTER_FRAME', null, { strokeColor: '#0984e3', fill: 'rgba(9,132,227,0.05)' })
+                mm.emit('data_change')
+                setContextMenu(null)
+              }}
+              disabled={contextMenu.node.isRoot}
+            >
               添加外框
             </ContextMenuItem>
-            <ContextMenuItem onClick={() => { mmRef.current?.outerFrame?.removeActiveOuterFrame(); setContextMenu(null) }}>
+            <ContextMenuItem onClick={() => { mmRef.current?.outerFrame?.removeActiveOuterFrame(); mmRef.current?.emit('data_change'); setContextMenu(null) }}>
               删除外框
             </ContextMenuItem>
 
@@ -734,7 +857,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             <ContextMenuItem onClick={() => { setLinkMode(true); linkModeRef.current = true; setContextMenu(null) }}>
               创建关联线
             </ContextMenuItem>
-            <ContextMenuItem onClick={() => { mmRef.current?.associativeLine?.removeLine(); setContextMenu(null) }}>
+            <ContextMenuItem onClick={() => { mmRef.current?.associativeLine?.removeLine(); mmRef.current?.emit('data_change'); setContextMenu(null) }}>
               删除关联线
             </ContextMenuItem>
 
