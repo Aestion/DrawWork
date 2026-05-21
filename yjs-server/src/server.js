@@ -189,6 +189,7 @@ async function authenticateToken(token) {
 
 async function loadRoomMeta(roomName, userId) {
   const database = await getDb()
+
   const row = await database.get(
     getSql(
       database.dialect,
@@ -454,8 +455,6 @@ wss.on('connection', async (ws, req) => {
   const token = url.searchParams.get('token')
   const roomName = parseRoomName(req.url)
 
-  console.log(`[Yjs] WebSocket connection attempt, room: ${roomName}, hasToken: ${!!token}`)
-
   if (!token || !roomName) {
     ws.close(1008, 'Missing token or room')
     return
@@ -481,51 +480,12 @@ wss.on('connection', async (ws, req) => {
     userConnections.get(authUser.userId).add(ws)
     roomConnections.set(roomName, (roomConnections.get(roomName) || 0) + 1)
 
-    // Track message count for debugging - must wrap BEFORE setupWSConnection
-    let messageCount = 0
-    const originalOn = ws.on
-    ws.on = (event, handler) => {
-      if (event === 'message') {
-        return originalOn.call(ws, event, (data) => {
-          messageCount++
-          const size = data?.byteLength || data?.length || 0
-          // Decode message type for debugging - convert to Uint8Array if needed
-          const arr = data instanceof ArrayBuffer ? new Uint8Array(data) : data
-          const msgType = arr && arr[0] !== undefined ? arr[0] : -1
-          // messageSync = 0, messageAwareness = 1
-          // Inside sync: SyncStep1 = 0, SyncStep2 = 1, Update = 2
-          let detail = ''
-          if (msgType === 0 && arr && arr.length > 1) {
-            const innerType = arr[1]
-            const innerName = innerType === 0 ? 'SyncStep1' : innerType === 1 ? 'SyncStep2' : innerType === 2 ? 'Update' : `unknown(${innerType})`
-            detail = ` (${innerName})`
-          }
-          const msgTypeName = msgType === 0 ? 'sync' : msgType === 1 ? 'awareness' : `unknown(${msgType})`
-          console.log(`[Yjs] WS msg #${messageCount} for room ${roomName}, size: ${size}, type: ${msgTypeName}${detail}`)
-          handler(data)
-        })
-      }
-      return originalOn.call(ws, event, handler)
-    }
-
     // Register WS message handler before loading doc snapshot.
     // getOrCreateDoc awaits DB load which yields the event loop; the client's
     // initial SyncStep1 arrives during that yield and is dropped if no handler
     // exists, so the server never sends SyncStep2 back and synced stays false.
     setupWSConnection(ws, req, { docName: roomName })
     await getOrCreateDoc(roomName, meta.canvasId)
-    console.log(`[Yjs] setupWSConnection done for room ${roomName}, ws.readyState: ${ws.readyState} (1=OPEN)`)
-
-    // Log doc state after connection
-    const doc = docs.get(roomName)
-    if (doc) {
-      const yMap = doc.getMap('excalidraw')
-      const json = yMap.toJSON()
-      const count = Array.isArray(json.elements) ? json.elements.length : Object.keys(json).filter(k => k.startsWith('__el_')).length
-      console.log(`[Yjs] Doc state for room ${roomName}: ${count} elements`)
-    }
-
-    console.log(`[Yjs] User ${authUser.userId} connected to room ${roomName} (clients: ${roomConnections.get(roomName)})`)
 
     ws.on('close', async () => {
       const connections = userConnections.get(authUser.userId)

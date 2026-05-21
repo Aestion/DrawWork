@@ -20,7 +20,7 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   const initialDataLoaded = useRef(false)
   const tencentDataRef = useRef(null)
 
-  const { connected, synced, onlineCount, yMap } = useYjs(roomId, token, { type: 'tencentmind' })
+  const { connected, synced, onlineCount, yMap, updateAwareness, getAwarenessStates } = useYjs(roomId, token, { type: 'tencentmind' })
 
   // Reset on canvas change
   useEffect(() => {
@@ -38,13 +38,9 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   const syncToYjs = useCallback((data) => {
     if (!yMap || !canEdit) return
     try {
-      const before = yMap.get('__tencent_state')
-      const beforeSize = before ? JSON.stringify(before.toJSON ? before.toJSON() : before).length : 0
       yMap.doc.transact(() => {
         yMap.set('__tencent_state', data)
       }, 'local-tencentmind-change')
-      const afterSize = JSON.stringify(data).length
-      console.log('[YJS-SYNC] Data written to Y.Map via syncToYjs, size:', beforeSize, '→', afterSize, 'bytes, hasRootTopic:', !!data?.rootTopic)
     } catch (err) {
       console.error('[useTencentMindYjs] Failed to sync to Yjs:', err)
     }
@@ -55,8 +51,10 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
     if (!yMap) return
 
     const observer = (event) => {
-      const isLocal = event.transaction?.origin === 'local-tencentmind-change'
-      if (isLocal) return
+      // Use transaction.local (Yjs built-in) instead of comparing origin strings.
+      // Both users write with origin 'local-tencentmind-change', so checking the
+      // origin string would cause user B to incorrectly ignore user A's changes.
+      if (event.transaction?.local) return
       const raw = yMap.get('__tencent_state')
       if (!raw) {
         console.warn('[YJS-OBS] observer fired but __tencent_state is null/undefined')
@@ -64,8 +62,6 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
       }
       // yMap.get() returns a Y.Map for nested objects — convert to plain object
       const data = typeof raw.toJSON === 'function' ? raw.toJSON() : raw
-      const dataSize = JSON.stringify(data).length
-      console.log('[YJS-OBS] REMOTE update received, size:', dataSize, 'hasRootTopic:', !!data?.rootTopic, 'rootTopicKeys:', Object.keys(data?.rootTopic || {}).join(','), 'origin:', typeof event.transaction?.origin)
 
       // Don't set initialDataLoaded.current or setLoading(false) here.
       // The HTTP primary loader is the source of truth and must run first.
@@ -233,6 +229,8 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
     synced,
     onlineCount,
     remoteUpdateVersion,
-    syncToYjs
+    syncToYjs,
+    updateAwareness,
+    getAwarenessStates
   }
 }

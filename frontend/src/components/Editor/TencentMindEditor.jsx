@@ -1,10 +1,25 @@
 import { useEffect, useRef, useState, forwardRef, useCallback } from 'react'
 import { tencentToSimpleMindMap, simpleMindMapToTencent, DEFAULT_TENCENT_MIND } from '../../lib/tencent-mind-utils'
 import UnbalancedLayoutPlugin from '../../lib/unbalanced-layout-plugin'
-import { TENCENT_MARKER_ICONS, questionIcon, priorityIcon, progressIcon, starIcon, checkIcon, crossIcon, ideaIcon, warningIcon, targetIcon, clockIcon } from '../../lib/marker-icons'
+import { TENCENT_MARKER_ICONS, markerIdToIconKey, questionIcon, priorityIcon, progressIcon, starIcon, checkIcon, crossIcon, ideaIcon, warningIcon, targetIcon, clockIcon } from '../../lib/marker-icons'
 import api from '../../lib/axios'
 import { useTencentMindYjs } from '../../hooks/useTencentMindYjs'
 import { useAuthStore } from '../../stores/authStore'
+
+// Color palette for remote cursors
+const CURSOR_COLORS = [
+  '#E74C3C', '#3498DB', '#2ECC71', '#F39C12', '#9B59B6',
+  '#1ABC9C', '#E67E22', '#34495E', '#16A085', '#8E44AD'
+]
+
+function getUserColor(userId) {
+  let hash = 0
+  for (let i = 0; i < userId.length; i++) {
+    hash = ((hash << 5) - hash) + userId.charCodeAt(i)
+    hash |= 0
+  }
+  return CURSOR_COLORS[Math.abs(hash) % CURSOR_COLORS.length]
+}
 
 const LAYOUTS = [
   { value: 'logicalStructure', label: '逻辑结构' },
@@ -98,14 +113,22 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const pluginsRegisteredRef = useRef(false)
   const prevCanvasIdRef = useRef(canvasId)
   const lastAppliedVersionRef = useRef(0)
+  const lastRemoteAppliedVersionRef = useRef(0)
   const saveDataRef = useRef(null)
+  const remoteUpdateCountRef = useRef(0)
+  const applyingRemoteUpdateRef = useRef(false)
+  const lastAppliedRemoteSnapshotRef = useRef('')
+  const lastSavedSnapshotRef = useRef('')
+  const suppressRemoteDataChangeCountRef = useRef(0)
+  const suppressRemoteDataChangeUntilRef = useRef(0)
   const [contextMenu, setContextMenu] = useState(null)
   const contextNodeRef = useRef(null)
   const markerMenuRef = useRef(null)
   const setContextMenuRef = useRef(setContextMenu)
 
-  // Get auth token from store (consistent with MindMapEditor)
+  // Get auth token and user from store (consistent with MindMapEditor)
   const token = useAuthStore((state) => state.token)
+  const user = useAuthStore((state) => state.user)
 
   const {
     tencentData: yjsTencentData,
@@ -114,14 +137,21 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     synced,
     onlineCount,
     remoteUpdateVersion,
-    syncToYjs
+    syncToYjs,
+    updateAwareness,
+    getAwarenessStates
   } = useTencentMindYjs({ canvasId, roomId, token, canEdit })
 
   // Sync Yjs data to originDataRef (initial load and remote updates)
   useEffect(() => {
     if (!yjsTencentData || yjsLoading) return
-    if (lastAppliedVersionRef.current === remoteUpdateVersion && originDataRef.current) return
-    console.log('[YJS-EDITOR] Applying Yjs data, version:', remoteUpdateVersion, 'hasBoundaries:', !!yjsTencentData?.rootTopic?.boundaries, 'generations:', !!yjsTencentData?.rootTopic?.extensions?.['drawwork.generalization'], 'relationships:', yjsTencentData?.relationships?.length)
+    // Always update originDataRef so the init effect has the latest data.
+    // The early-return only skips the version bump + setLoading when data hasn't changed,
+    // but originDataRef must stay current so mind map recreation uses fresh data.
+    if (lastAppliedVersionRef.current === remoteUpdateVersion && originDataRef.current) {
+      originDataRef.current = yjsTencentData
+      return
+    }
     originDataRef.current = yjsTencentData
     lastAppliedVersionRef.current = remoteUpdateVersion
     setLoading(false)
@@ -133,9 +163,247 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       prevCanvasIdRef.current = canvasId
       originDataRef.current = null
       lastAppliedVersionRef.current = 0
+      lastRemoteAppliedVersionRef.current = 0
       setLoading(true)
     }
   }, [canvasId])
+
+  // ── Restoration helpers (shared by onFirstRender and remote-update effect) ──
+
+  function restoreAssociativeLines(mindMap, originData) {
+    const relationships = originData?.relationships || []
+    if (relationships.length === 0) return
+    const buildNodeIdMap = (dataNode) => {
+      const map = new Map()
+      const walk = (n) => {
+        const node = n._node || n
+        const id = node?.nodeData?.data?._tencentMeta?.id
+        if (id) map.set(id, node)
+        if (n.children) n.children.forEach(c => walk(c))
+      }
+      walk(dataNode)
+      return map
+    }
+    const nodeMap = buildNodeIdMap(mindMap.renderer.renderTree)
+    for (const rel of relationships) {
+      const fromNode = nodeMap.get(rel.end1Id)
+      const toNode = nodeMap.get(rel.end2Id)
+      if (!fromNode || !toNode) continue
+      mindMap.associativeLine?.addLine(fromNode, toNode)
+      if (rel.title) {
+        try {
+          const toUid = toNode.getData('uid')
+          const allText = fromNode.getData('associativeLineText') || {}
+          allText[toUid] = rel.title
+          mindMap.execCommand('SET_NODE_DATA', fromNode, { associativeLineText: allText })
+        } catch (e) {
+          console.error('Failed to restore line text:', e)
+        }
+      }
+      if (rel.controlPoints && Object.keys(rel.controlPoints).length > 0) {
+        try {
+          const toUid = toNode.getData('uid')
+          const targets = fromNode.getData('associativeLineTargets') || []
+          const idx = targets.indexOf(toUid)
+          if (idx >= 0) {
+            const sp = rel.lineEndPoints?.["0"] || {}
+            const ep = rel.lineEndPoints?.["1"] || {}
+            const cp0 = rel.controlPoints["0"] || {}
+            const cp1 = rel.controlPoints["1"] || {}
+            const offsets = [
+              { x: (cp0.x || 0) - (sp.x || 0), y: (cp0.y || 0) - (sp.y || 0) },
+              { x: (cp1.x || 0) - (ep.x || 0), y: (cp1.y || 0) - (ep.y || 0) }
+            ]
+            const allOffsets = fromNode.getData('associativeLineTargetControlOffsets') || []
+            allOffsets[idx] = offsets
+            fromNode.setData('associativeLineTargetControlOffsets', allOffsets)
+            const allPoints = fromNode.getData('associativeLinePoint') || []
+            allPoints[idx] = { startPoint: sp, endPoint: ep }
+            fromNode.setData('associativeLinePoint', allPoints)
+          }
+        } catch (e) {
+          console.error('Failed to restore control points:', e)
+        }
+      }
+      if (rel.style && rel.style.lineColor) {
+        try {
+          const toUid = toNode.getData('uid')
+          const allStyles = fromNode.getData('associativeLineStyle') || {}
+          allStyles[toUid] = {
+            associativeLineColor: rel.style.lineColor,
+            ...(rel.style.lineWidth != null ? { associativeLineWidth: rel.style.lineWidth } : {}),
+            ...(rel.style.lineDasharray != null ? { associativeLineDasharray: rel.style.lineDasharray } : {})
+          }
+          fromNode.setData('associativeLineStyle', allStyles)
+        } catch (e) {
+          console.error('Failed to restore line style:', e)
+        }
+      }
+    }
+    mindMap.associativeLine?.renderAllLines?.()
+  }
+
+  function restoreGeneralizations(mindMap, originData) {
+    const preserved = []
+    const walk = (node, depth = 0) => {
+      const mn = node._node || node
+      const meta = mn?.nodeData?.data?._tencentMeta
+      const genData = meta?.extensions?.['drawwork.generalization']
+      if (genData && genData.length > 0) {
+        const range = genData[0].range
+        if (range && mn.children) {
+          const targetChildren = mn.children.slice(range[0], range[1] + 1)
+          const nodeInstances = targetChildren.map(n => n._node).filter(Boolean)
+          if (nodeInstances.length > 0) {
+            mindMap.renderer.activeNodeList = nodeInstances
+            mindMap.execCommand('ADD_GENERALIZATION', { text: genData[0].text || '概要' })
+            try {
+              mn.setData?.('generalization', genData)
+              if (mn.nodeData?.data) mn.nodeData.data.generalization = genData
+              if (mn.data) mn.data.generalization = genData
+            } catch (e) {
+              console.error('Failed to preserve generalization data:', e)
+            }
+            preserved.push({ node: mn, genData })
+          }
+        } else if (!range) {
+          try {
+            mindMap.execCommand('SET_NODE_DATA', mn, { generalization: genData })
+            preserved.push({ node: mn, genData })
+          } catch (e) {
+            console.error('Failed to restore self-generalization:', e)
+          }
+        }
+      }
+      if (node.children) node.children.forEach(c => walk(c, depth + 1))
+    }
+    walk(mindMap.renderer.renderTree, 0)
+    mindMap.render(() => {
+      preserved.forEach(({ node, genData }) => {
+        try {
+          node.setData?.('generalization', genData)
+          if (node.nodeData?.data) node.nodeData.data.generalization = genData
+          if (node.data) node.data.generalization = genData
+        } catch (e) {
+          console.error('Failed to preserve generalization after render:', e)
+        }
+      })
+    })
+  }
+
+  function restoreBoundaries(mindMap, originData) {
+    const boundaryList = originData?.rootTopic?.boundaries
+    const rootChildren = mindMap.renderer.renderTree?.children
+    if (!boundaryList || boundaryList.length === 0 || !rootChildren) return
+    for (const boundary of boundaryList) {
+      const [start, end] = boundary.range || [0, 0]
+      const targetChildren = rootChildren.slice(start, end + 1)
+      if (targetChildren.length > 0) {
+        const nodeInstances = targetChildren.map(n => n._node).filter(Boolean)
+        if (nodeInstances.length > 0) {
+          mindMap.renderer.activeNodeList = nodeInstances
+          mindMap.execCommand('ADD_OUTER_FRAME', null, {
+            strokeColor: boundary.strokeColor || '#0984e3',
+            fill: boundary.fill || 'rgba(9,132,227,0.05)',
+            radius: boundary.radius || 5,
+            strokeWidth: boundary.strokeWidth || 2,
+            strokeDasharray: boundary.strokeDasharray || '0'
+          })
+        }
+      }
+    }
+  }
+
+  function restoreAllMarkers(mindMap, originData) {
+    const walk = (node) => {
+      const mn = node._node || node
+      const meta = mn?.nodeData?.data?._tencentMeta
+      if (meta?.markers?.length) {
+        const iconKeys = meta.markers.map(m => markerIdToIconKey(m.markerId)).filter(Boolean)
+        if (iconKeys.length) {
+          mn.setIcon(iconKeys)
+        }
+      }
+      if (node.children) node.children.forEach(walk)
+    }
+    walk(mindMap.renderer.renderTree)
+  }
+
+  function overlaySimpleNodeDataByTencentId(mindMap, smmData) {
+    const dataById = new Map()
+    const collect = (node) => {
+      const id = node?.data?._tencentMeta?.id
+      if (id) dataById.set(id, node.data)
+      if (node?.children) node.children.forEach(collect)
+    }
+    collect(smmData)
+
+    const apply = (node) => {
+      const mn = node._node || node
+      const targetData = mn?.nodeData?.data || mn?.data
+      const id = targetData?._tencentMeta?.id
+      const sourceData = id ? dataById.get(id) : null
+      if (targetData && sourceData) {
+        ;['icon', 'generalization', 'outerFrame'].forEach(key => {
+          if (sourceData[key] !== undefined) {
+            targetData[key] = sourceData[key]
+            mn.setData?.(key, sourceData[key])
+          }
+        })
+      }
+      if (node.children) node.children.forEach(apply)
+    }
+    apply(mindMap.renderer.renderTree)
+  }
+
+  async function restoreNodeMedia(mindMap) {
+    const walk = async (node) => {
+      const realNode = node?._node || node
+      const data = realNode?.nodeData?.data || realNode?.data
+      if (data?._uploadId) {
+        const uploadId = data._uploadId
+        const mediaType = data._mediaType
+        try {
+          const blobRes = await api.get(`/upload/${uploadId}`, { responseType: 'blob' })
+          const blobUrl = URL.createObjectURL(blobRes.data)
+          blobUrlsRef.current.add(blobUrl)
+          if (mediaType === 'video') {
+            pendingVideoBlobsRef.current.set(uploadId, blobUrl)
+            const imageSize = data._imageSize || { width: 120, height: 80, custom: true }
+            mindMap.execCommand('SET_NODE_IMAGE', realNode, {
+              url: VIDEO_PLACEHOLDER,
+              width: imageSize.width,
+              height: imageSize.height,
+              custom: imageSize.custom ?? true
+            })
+            data.image = VIDEO_PLACEHOLDER
+            data.imageSize = imageSize
+          } else {
+            const imageSize = data._imageSize || { width: 200, height: 150, custom: true }
+            mindMap.execCommand('SET_NODE_IMAGE', realNode, {
+              url: blobUrl,
+              width: imageSize.width,
+              height: imageSize.height,
+              custom: imageSize.custom ?? true
+            })
+            data.image = blobUrl
+            data.imageSize = imageSize
+          }
+        } catch (err) {
+          console.error('Failed to restore media:', err)
+        }
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          await walk(child)
+        }
+      }
+    }
+    await walk(mindMap.renderer.renderTree)
+    mindMap.render(() => {
+      injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+    })
+  }
 
   // Initialize simple-mind-map
   useEffect(() => {
@@ -144,45 +412,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     let mindMap = null
     const onKeyDown = (e) => {
       if (e.key === 'Escape') setContextMenuRef.current(null)
-    }
-
-    const restoreNodeMedia = async (mindMap) => {
-      const walk = async (node) => {
-        if (!mounted) return
-        if (node.nodeData?.data?._uploadId) {
-          const uploadId = node.nodeData.data._uploadId
-          const mediaType = node.nodeData.data._mediaType
-          try {
-            const blobRes = await api.get(`/upload/${uploadId}`, { responseType: 'blob' })
-            if (!mounted) return
-            const blobUrl = URL.createObjectURL(blobRes.data)
-            blobUrlsRef.current.add(blobUrl)
-            if (mediaType === 'video') {
-              pendingVideoBlobsRef.current.set(uploadId, blobUrl)
-              node.nodeData.data.image = VIDEO_PLACEHOLDER
-              const imgSize = node.nodeData.data._imageSize || { width: 120, height: 80, custom: true }
-              node.nodeData.data.imageSize = imgSize
-            } else {
-              const imageSize = node.nodeData.data._imageSize || { width: 200, height: 150, custom: true }
-              node.nodeData.data.image = blobUrl
-              node.nodeData.data.imageSize = imageSize
-            }
-          } catch (err) {
-            console.error('Failed to restore media:', err)
-          }
-        }
-        if (node.children) {
-          for (const child of node.children) {
-            await walk(child)
-          }
-        }
-      }
-      await walk(mindMap.renderer.renderTree)
-      if (!mounted) return
-      // Re-render to create SVG <image> elements for placeholders
-      mindMap.render(() => {
-        injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
-      })
     }
 
     // Clear stale blob URLs from previous init (e.g. on remoteUpdateVersion change)
@@ -295,6 +524,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         iconList: TENCENT_MARKER_ICONS
       })
       mmRef.current = mindMap
+      if (typeof window !== 'undefined') window.__mm = mindMap
 
       // Right-click context menu (library emits node_contextmenu on node groups)
       mindMap.on('node_contextmenu', (e, node) => {
@@ -336,171 +566,39 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
         restoreNodeMedia(mindMap).catch(console.error)
 
-        // Restore associative lines from Tencent relationships
-        try {
-          const relationships = originDataRef.current?.relationships || []
-          if (relationships.length > 0) {
-            // After layout, render tree data nodes have ._node pointing to Node instances.
-            // Walk the render tree using ._node to find nodes by their tencent ID.
-            const buildNodeIdMap = (dataNode) => {
-              const map = new Map()
-              const walk = (n) => {
-                const node = n._node || n
-                const id = node?.nodeData?.data?._tencentMeta?.id
-                if (id) map.set(id, node)
-                if (n.children) n.children.forEach(c => walk(c))
-              }
-              walk(dataNode)
-              return map
-            }
-            const nodeMap = buildNodeIdMap(mindMap.renderer.renderTree)
-            for (const rel of relationships) {
-              const fromNode = nodeMap.get(rel.end1Id)
-              const toNode = nodeMap.get(rel.end2Id)
-              if (fromNode && toNode) {
-                mindMap.associativeLine?.addLine(fromNode, toNode)
-                // Restore custom bezier control points if saved
-                if (rel.controlPoints && Object.keys(rel.controlPoints).length > 0) {
-                  try {
-                    const toUid = toNode.getData('uid')
-                    const targets = fromNode.getData('associativeLineTargets') || []
-                    const idx = targets.indexOf(toUid)
-                    if (idx >= 0) {
-                      const sp = rel.lineEndPoints?.["0"] || {}
-                      const ep = rel.lineEndPoints?.["1"] || {}
-                      const cp0 = rel.controlPoints["0"] || {}
-                      const cp1 = rel.controlPoints["1"] || {}
-                      const offsets = [
-                        { x: (cp0.x || 0) - (sp.x || 0), y: (cp0.y || 0) - (sp.y || 0) },
-                        { x: (cp1.x || 0) - (ep.x || 0), y: (cp1.y || 0) - (ep.y || 0) }
-                      ]
-                      const allOffsets = fromNode.getData('associativeLineTargetControlOffsets') || []
-                      allOffsets[idx] = offsets
-                      fromNode.setData('associativeLineTargetControlOffsets', allOffsets)
-                      const allPoints = fromNode.getData('associativeLinePoint') || []
-                      allPoints[idx] = { startPoint: sp, endPoint: ep }
-                      fromNode.setData('associativeLinePoint', allPoints)
-                    }
-                  } catch (e) {
-                    console.error('Failed to restore control points:', e)
-                  }
-                }
-                // Restore line style if saved
-                if (rel.style && rel.style.lineColor) {
-                  try {
-                    const toUid = toNode.getData('uid')
-                    const allStyles = fromNode.getData('associativeLineStyle') || {}
-                    allStyles[toUid] = {
-                      associativeLineColor: rel.style.lineColor,
-                      ...(rel.style.lineWidth != null ? { associativeLineWidth: rel.style.lineWidth } : {}),
-                      ...(rel.style.lineDasharray != null ? { associativeLineDasharray: rel.style.lineDasharray } : {})
-                    }
-                    fromNode.setData('associativeLineStyle', allStyles)
-                  } catch (e) {
-                    console.error('Failed to restore line style:', e)
-                  }
-                }
-              }
-            }
-          }
-        } catch (err) {
-          console.error('Failed to restore associative lines:', err)
-        }
-
-        // Restore generalizations from extensions
-        try {
-          const restoreGeneralizations = (parentNode) => {
-            const walk = (node, depth = 0) => {
-              const mn = node._node || node
-              const meta = mn?.nodeData?.data?._tencentMeta
-              const genData = meta?.extensions?.['drawwork.generalization']
-              if (genData && genData.length > 0) {
-                const range = genData[0].range
-                if (range && mn.children) {
-                  const targetChildren = mn.children.slice(range[0], range[1] + 1)
-                  const nodeInstances = targetChildren.map(n => n._node).filter(Boolean)
-                  if (nodeInstances.length > 0) {
-                    mindMap.renderer.activeNodeList = nodeInstances
-                    mindMap.execCommand('ADD_GENERALIZATION', { text: genData[0].text || '概要' })
-                  }
-                } else if (!range) {
-                  try {
-                    mindMap.execCommand('SET_NODE_DATA', mn, { generalization: genData })
-                  } catch (e) {
-                    console.error('Failed to restore self-generalization:', e)
-                  }
-                }
-              }
-              if (node.children) node.children.forEach(c => walk(c, depth + 1))
-            }
-            walk(parentNode, 0)
-            mindMap.render()
-          }
-          restoreGeneralizations(mindMap.renderer.renderTree)
-        } catch (err) {
-          console.error('Failed to restore generalizations:', err)
-        }
-
-        // Restore boundaries from originDataRef.rootTopic.boundaries
-        try {
-          const boundaryList = originDataRef.current?.rootTopic?.boundaries
-          const rootChildren = mindMap.renderer.renderTree?.children
-          if (boundaryList && boundaryList.length > 0 && rootChildren) {
-            for (const boundary of boundaryList) {
-              const [start, end] = boundary.range || [0, 0]
-              const targetChildren = rootChildren.slice(start, end + 1)
-              if (targetChildren.length > 0) {
-                // Map data tree nodes to Node instances via ._node
-                const nodeInstances = targetChildren.map(n => n._node).filter(Boolean)
-                if (nodeInstances.length > 0) {
-                  mindMap.renderer.activeNodeList = nodeInstances
-                  mindMap.execCommand('ADD_OUTER_FRAME', null, {
-                    strokeColor: boundary.strokeColor || '#0984e3',
-                    fill: boundary.fill || 'rgba(9,132,227,0.05)',
-                    radius: boundary.radius || 5,
-                    strokeWidth: boundary.strokeWidth || 2,
-                    strokeDasharray: boundary.strokeDasharray || '0'
-                  })
-                }
-              }
-            }
-          }
-        } catch (err) {
-          console.error('Failed to restore boundaries:', err)
-        }
-
-        // Restore markers from _tencentMeta
-        try {
-          const restoreMarkers = (parentNode) => {
-            const walk = (node) => {
-              const mn = node._node || node
-              const meta = mn?.nodeData?.data?._tencentMeta
-              if (meta?.markers?.length) {
-                const iconKeys = meta.markers.map(m => {
-                  if (m.markerId === 'symbol-question') return 'tencent_question'
-                  return null
-                }).filter(Boolean)
-                if (iconKeys.length) {
-                  mn.setIcon(iconKeys)
-                }
-              }
-              if (node.children) node.children.forEach(walk)
-            }
-            walk(parentNode)
-          }
-          restoreMarkers(mindMap.renderer.renderTree)
-        } catch (err) {
-          console.error('Failed to restore markers:', err)
-        }
+        try { restoreAssociativeLines(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore associative lines:', err) }
+        try { restoreGeneralizations(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore generalizations:', err) }
+        try { restoreBoundaries(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore boundaries:', err) }
+        try { restoreAllMarkers(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore markers:', err) }
 
         mindMap.emit('data_change')
       }
       mindMap.on('node_tree_render_end', onFirstRender)
 
-      // Listen for data changes to auto-save
+      // Listen for data changes to auto-save. Skip data_change events
+      // during the init setup period (restoreNodeMedia, restoreGeneralizations,
+      // restoreBoundaries, etc. all emit data_change). Using a time-based
+      // approach ensures we don't save stale data before Yjs sync propagates
+      // remote updates to other clients.
+      const initTime = Date.now()
       mindMap.on('data_change', () => {
+        // Skip events during the first 4 seconds after init (setup phase)
+        if (Date.now() - initTime < 4000) return
+        if (applyingRemoteUpdateRef.current) return
+        if (suppressRemoteDataChangeCountRef.current > 0) {
+          if (Date.now() < suppressRemoteDataChangeUntilRef.current) {
+            suppressRemoteDataChangeCountRef.current -= 1
+            return
+          }
+          suppressRemoteDataChangeCountRef.current = 0
+        }
         clearTimeout(saveTimerRef.current)
+        const snapshotCount = remoteUpdateCountRef.current
         saveTimerRef.current = setTimeout(() => {
+          if (applyingRemoteUpdateRef.current) return
+          if (remoteUpdateCountRef.current !== snapshotCount) {
+            return
+          }
           saveDataRef.current?.()
         }, 2000)
       })
@@ -513,16 +611,56 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     return () => {
       document.removeEventListener('keydown', onKeyDown)
       mounted = false
-      clearTimeout(saveTimerRef.current)
+      // Do NOT clear saveTimerRef — pending saves must complete even when
+      // the mind map is destroyed/recreated on remote Yjs updates.
       blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
       blobUrlsRef.current.clear()
       if (mmRef.current) {
         mmRef.current.destroy()
         mmRef.current = null
+        if (typeof window !== 'undefined') window.__mm = null
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, loading, remoteUpdateVersion])
+  }, [isActive, loading])
+
+  // Apply remote Yjs updates in-place without destroying/recreating the mind map.
+  // The init effect above handles initial load and canvas changes only.
+  useEffect(() => {
+    if (!yjsTencentData || yjsLoading || !remoteUpdateVersion) return
+    if (!mmRef.current || !originDataRef.current) return
+    if (lastRemoteAppliedVersionRef.current >= remoteUpdateVersion) return
+    lastRemoteAppliedVersionRef.current = remoteUpdateVersion
+    remoteUpdateCountRef.current++
+    try {
+      originDataRef.current = yjsTencentData
+      lastAppliedRemoteSnapshotRef.current = JSON.stringify(yjsTencentData)
+      applyingRemoteUpdateRef.current = true
+      suppressRemoteDataChangeCountRef.current = 4
+      suppressRemoteDataChangeUntilRef.current = Date.now() + 1500
+      clearTimeout(saveTimerRef.current)
+      const smmData = tencentToSimpleMindMap(yjsTencentData)
+      mmRef.current.setData(smmData)
+      mmRef.current.render(() => {
+        overlaySimpleNodeDataByTencentId(mmRef.current, smmData)
+        // Re-apply imperative features destroyed by setData+render
+        try { restoreAssociativeLines(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore associative lines:', e) }
+        try { restoreGeneralizations(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore generalizations:', e) }
+        try { restoreBoundaries(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore boundaries:', e) }
+        try { restoreAllMarkers(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore markers:', e) }
+        restoreNodeMedia(mmRef.current).catch(e => console.error('Remote restore media:', e))
+        setTimeout(() => {
+          suppressRemoteDataChangeUntilRef.current = Date.now() + 1500
+          applyingRemoteUpdateRef.current = false
+        }, 0)
+      })
+    } catch (err) {
+      applyingRemoteUpdateRef.current = false
+      console.error('[YJS-REMOTE] Failed to apply remote update:', err)
+      setLoading(true)
+      setLoading(false)
+    }
+  }, [yjsTencentData, remoteUpdateVersion, yjsLoading])
 
   // Report real connection status via onConnectionChange
   useEffect(() => {
@@ -539,13 +677,140 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     mmRef.current?.setMode(readonly ? 'readonly' : 'edit')
   }, [readonly])
 
-  // Save data to API
-  const saveData = useCallback(async () => {
+  // Broadcast local cursor position via Yjs awareness
+  useEffect(() => {
+    if (!roomId || !updateAwareness || !isActive) return
+
+    const handleMouseMove = (e) => {
+      const mm = mmRef.current
+      if (!mm) return
+      // Get viewport coordinates relative to the container
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+      updateAwareness({
+        userId: user?.id || 'anonymous',
+        username: user?.username || '匿名用户',
+        pointer: { x, y, tool: 'pointer' },
+        button: e.buttons > 0 ? 'down' : 'up'
+      })
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    return () => window.removeEventListener('mousemove', handleMouseMove)
+  }, [roomId, updateAwareness, user, isActive])
+
+  // Poll remote awareness states and render remote cursors
+  useEffect(() => {
+    if (!roomId || !getAwarenessStates || !isActive) return
+
+    let lastSerialized = ''
+    const cursorContainerRef = { current: null }
+
+    const interval = setInterval(() => {
+      const states = getAwarenessStates()
+      const remoteCursors = []
+      states.forEach((state, clientId) => {
+        if (!state || !state.userId || !state.pointer) return
+        if (state.userId === user?.id) return
+        remoteCursors.push({
+          id: clientId,
+          userId: state.userId,
+          username: state.username || '协作者',
+          pointer: state.pointer,
+          color: getUserColor(state.userId)
+        })
+      })
+
+      const serialized = JSON.stringify(remoteCursors)
+      if (serialized === lastSerialized) return
+      lastSerialized = serialized
+
+      // Render remote cursors as overlay elements
+      const container = containerRef.current
+      if (!container) return
+
+      // Remove old cursor elements
+      const oldCursors = container.querySelectorAll('.remote-cursor')
+      oldCursors.forEach(el => el.remove())
+
+      // Add new cursor elements
+      for (const cursor of remoteCursors) {
+        const cursorEl = document.createElement('div')
+        cursorEl.className = 'remote-cursor'
+        cursorEl.style.cssText = `
+          position: absolute;
+          left: ${cursor.pointer.x}px;
+          top: ${cursor.pointer.y}px;
+          pointer-events: none;
+          z-index: 1000;
+          transform: translate(-50%, -50%);
+        `
+        cursorEl.innerHTML = `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M5 3L19 12L12 13L9 20L5 3Z" fill="${cursor.color}" stroke="white" stroke-width="1.5"/>
+          </svg>
+          <span style="
+            position: absolute;
+            left: 16px;
+            top: 16px;
+            background: ${cursor.color};
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+          ">${cursor.username}</span>
+        `
+        container.appendChild(cursorEl)
+      }
+    }, 50)
+
+    return () => {
+      clearInterval(interval)
+      // Clean up cursor elements
+      const container = containerRef.current
+      if (container) {
+        const cursors = container.querySelectorAll('.remote-cursor')
+        cursors.forEach(el => el.remove())
+      }
+    }
+  }, [roomId, getAwarenessStates, user, isActive])
+
+  // Build a clean data tree from the mind map's node tree.
+  // mmRef.current.getData() can return corrupted data (e.g. root text replaced
+  // with a child's text) after INSERT_CHILD_NODE with the RichText plugin,
+  // so we walk the node tree directly to build an accurate snapshot.
+  function buildDataTreeFromNodes() {
+    const mm = mmRef.current
+    if (!mm?.renderer?.renderTree) return null
+
+    const walk = (node) => {
+      const realNode = node?._node || node
+      const data = { ...(realNode?.nodeData?.data || realNode?.data || node?.data || {}) }
+      const children = []
+      if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+          children.push(walk(child))
+        }
+      }
+      return { data, children }
+    }
+
+    return walk(mm.renderer.renderTree)
+  }
+
+  // Save data to API. skipYjs=true persists to HTTP without re-broadcasting via Yjs
+  // (used when the save is triggered by a remote Yjs update that's already been applied).
+  const saveData = useCallback(async ({ skipYjs = false } = {}) => {
     if (!originDataRef.current || !mmRef.current) {
       return
     }
     try {
-      const currentData = mmRef.current.getData()
+      const currentData = buildDataTreeFromNodes()
+      if (!currentData) return
       const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
 
       // Persist associative lines as Tencent relationships (always overwrite)
@@ -597,11 +862,15 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             }
           }
 
+          // Extract line text from node data (associativeLineText maps targetUid → text)
+          const allLineText = fromNode.getData?.('associativeLineText') || {}
+          const lineText = allLineText[toUid] || ''
+
           relationships.push({
             id: `line_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             end1Id: fromId,
             end2Id: toId,
-            title: '',
+            title: lineText,
             controlPoints,
             lineEndPoints,
             style: lineStyle
@@ -610,11 +879,15 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       }
       tencentData.relationships = relationships
 
+      const snapshot = JSON.stringify(tencentData)
+      if (snapshot === lastAppliedRemoteSnapshotRef.current || snapshot === lastSavedSnapshotRef.current) {
+        return
+      }
+
       originDataRef.current = tencentData
-      console.log('[YJS-SAVE] Calling syncToYjs, data size:', JSON.stringify(tencentData).length, 'relationships:', relationships.length, 'hasRootTopic:', !!tencentData?.rootTopic)
-      syncToYjs(tencentData)
       await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
-      console.log('[YJS-SAVE] API save complete')
+      lastSavedSnapshotRef.current = snapshot
+      if (!skipYjs) syncToYjs(tencentData)
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
     }
@@ -662,13 +935,18 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         // Set media data on the node's nodeData.data object
         if (file.type.startsWith('video/')) {
           // Placeholder image reserves layout space; injectVideoPlaceholders swaps it for live <video>
+          const imageSize = { width: 120, height: 80, custom: true }
           pendingVideoBlobsRef.current.set(uploadId, blobUrl)
-          raw.nodeData.data.image = VIDEO_PLACEHOLDER
-          raw.nodeData.data.imageSize = { width: 120, height: 80, custom: true }
+          mmRef.current?.execCommand('SET_NODE_IMAGE', raw, {
+            url: VIDEO_PLACEHOLDER,
+            width: imageSize.width,
+            height: imageSize.height,
+            custom: imageSize.custom
+          })
           raw.nodeData.data._uploadId = uploadId
           raw.nodeData.data._mediaType = 'video'
           raw.nodeData.data._blobUrl = blobUrl
-          raw.nodeData.data._imageSize = { width: 120, height: 80, custom: true }
+          raw.nodeData.data._imageSize = imageSize
         } else {
           const img = new Image()
           img.src = blobUrl
@@ -680,11 +958,16 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             w = Math.round(w * ratio)
             h = Math.round(h * ratio)
           }
-          raw.nodeData.data.image = blobUrl
-          raw.nodeData.data.imageSize = { width: w, height: h, custom: true }
+          const imageSize = { width: w, height: h, custom: true }
+          mmRef.current?.execCommand('SET_NODE_IMAGE', raw, {
+            url: blobUrl,
+            width: imageSize.width,
+            height: imageSize.height,
+            custom: imageSize.custom
+          })
           raw.nodeData.data._uploadId = uploadId
           raw.nodeData.data._mediaType = 'image'
-          raw.nodeData.data._imageSize = { width: w, height: h, custom: true }
+          raw.nodeData.data._imageSize = imageSize
         }
         mmRef.current?.render(() => {
           injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)

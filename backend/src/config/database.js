@@ -24,7 +24,9 @@ function createSqliteSequelize(storagePath, logging) {
 function resolveSqliteStorage(rawUrl) {
   const target = rawUrl.replace(/^sqlite:/, '')
   if (!target || target === ':memory:') return target || ':memory:'
-  return path.isAbsolute(target) ? target : path.resolve(__dirname, '..', '..', target)
+  // DATABASE_URL is relative to where .env lives (DrawWork/), not backend/src/config/
+  const envRoot = path.resolve(__dirname, '..', '..', '..')
+  return path.isAbsolute(target) ? target : path.resolve(envRoot, target)
 }
 
 function createSequelize() {

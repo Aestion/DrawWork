@@ -1,3 +1,5 @@
+import { iconKeyToMarkerId, markerIdToIconKey } from './marker-icons'
+
 /**
  * Tencent Docs style mind map data format conversion utilities.
  * Converts between Tencent Docs rootTopic format and simple-mind-map format.
@@ -77,6 +79,18 @@ function convertNode(tencentNode) {
     node.data.bold = true
   }
 
+  if (tencentNode.markers?.length) {
+    const iconKeys = tencentNode.markers
+      .map(marker => markerIdToIconKey(marker.markerId))
+      .filter(Boolean)
+    if (iconKeys.length > 0) node.data.icon = iconKeys
+  }
+
+  const generalization = tencentNode.extensions?.['drawwork.generalization']
+  if (generalization?.length) {
+    node.data.generalization = generalization
+  }
+
   // Preserve Tencent-specific metadata for round-trip fidelity
   const meta = {}
   if (tencentNode.id) meta.id = tencentNode.id
@@ -117,9 +131,25 @@ function convertNode(tencentNode) {
   const attached = tencentNode.children?.attached
   if (attached && attached.length > 0) {
     node.children = attached.map(child => convertNode(child))
+    applyBoundariesToChildren(node, tencentNode.boundaries)
   }
 
   return node
+}
+
+function applyBoundariesToChildren(node, boundaries) {
+  if (!node.children || !boundaries?.length) return
+  boundaries.forEach((boundary, index) => {
+    const [start, end] = boundary.range || [0, 0]
+    const { range, ...style } = boundary
+    const outerFrame = {
+      groupId: boundary.id || `boundary_${index}`,
+      ...style
+    }
+    for (let i = start; i <= end && i < node.children.length; i++) {
+      if (i >= 0) node.children[i].data.outerFrame = outerFrame
+    }
+  })
 }
 
 /**
@@ -219,12 +249,28 @@ function rebuildNode(text, meta, children) {
   return node
 }
 
+function cloneTencentMeta(meta) {
+  if (!meta) return {}
+  return {
+    ...meta,
+    markers: meta.markers ? [...meta.markers] : undefined,
+    boundaries: meta.boundaries ? [...meta.boundaries] : undefined,
+    extensions: meta.extensions ? { ...meta.extensions } : undefined
+  }
+}
+
 /**
  * Recursively convert simple-mind-map node back to Tencent format.
  */
 function convertBack(smmNode, origMeta) {
   let text = smmNode.data?.text || ''
-  const meta = smmNode.data?._tencentMeta || origMeta || {}
+  const meta = cloneTencentMeta(smmNode.data?._tencentMeta || origMeta)
+  delete meta.markers
+  if (meta.extensions) {
+    delete meta.extensions['drawwork.generalization']
+    delete meta.extensions['drawwork.media']
+    if (Object.keys(meta.extensions).length === 0) delete meta.extensions
+  }
 
   // Strip HTML tags added by RichText plugin for non-rich-text nodes.
   // The plugin wraps ALL text in <p> tags during editing (even without richText: true),
@@ -265,10 +311,9 @@ function convertBack(smmNode, origMeta) {
     const reconstructed = Object.values(boundaryMap)
     if (reconstructed.length > 0) {
       meta.boundaries = reconstructed
+    } else {
+      delete meta.boundaries
     }
-    // Do NOT delete meta.boundaries when no outerFrame on children.
-    // During initial hydration, restoreBoundaries may not have run yet,
-    // so deleting here causes permanent data loss on auto-save.
   }
 
   const node = rebuildNode(text, meta, children)
@@ -279,18 +324,15 @@ function convertBack(smmNode, origMeta) {
     node.extensions['drawwork.generalization'] = generalization
   }
 
-  // Convert simple-mind-map icon data back to Tencent markers
+  // Convert simple-mind-map icon data back to Tencent markers (all 10 types)
   const iconData = smmNode.data?.icon
   if (iconData && iconData.length > 0) {
     const markers = iconData.map(iconKey => {
-      let markerId
-      if (iconKey === 'tencent_question') markerId = 'symbol-question'
-      else if (iconKey === 'tencent_priority') markerId = 'symbol-priority'
-      else if (iconKey === 'tencent_progress') markerId = 'symbol-progress'
+      const markerId = iconKeyToMarkerId(iconKey)
       return markerId ? {
         markerId,
         id: `marker_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        color: markerId === 'symbol-question' ? '#f88825' : '#e74c3c'
+        color: '#e74c3c'
       } : null
     }).filter(Boolean)
     if (markers.length > 0) {
@@ -316,7 +358,13 @@ function convertBack(smmNode, origMeta) {
 export function simpleMindMapToTencent(smmData, origTencentData) {
   if (!smmData) return origTencentData || { rootTopic: { id: 'root', title: makeTitle(''), children: { attached: [], detached: [] } } }
 
-  const rootMeta = smmData.data?._tencentMeta || origTencentData?.rootTopic || { id: 'root' }
+  const rootMeta = cloneTencentMeta(smmData.data?._tencentMeta || origTencentData?.rootTopic || { id: 'root' })
+  delete rootMeta.markers
+  if (rootMeta.extensions) {
+    delete rootMeta.extensions['drawwork.generalization']
+    delete rootMeta.extensions['drawwork.media']
+    if (Object.keys(rootMeta.extensions).length === 0) delete rootMeta.extensions
+  }
   const children = smmData.children
     ? smmData.children.map(c => convertBack(c, null))
     : []
@@ -338,8 +386,9 @@ export function simpleMindMapToTencent(smmData, origTencentData) {
     const rootBoundaries = Object.values(rootBoundaryMap)
     if (rootBoundaries.length > 0) {
       rootMeta.boundaries = rootBoundaries
+    } else {
+      delete rootMeta.boundaries
     }
-    // Same as above: preserve existing boundaries during init hydration
   }
 
   const rootTopic = rebuildNode(smmData.data?.text || '', rootMeta, children)

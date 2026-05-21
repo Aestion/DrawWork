@@ -146,8 +146,6 @@ export function useYjs(roomId, token, options = {}) {
   useEffect(() => {
     if (!roomId || !token) return
 
-    // Debug log removed
-
     const conn = getConnection(roomId, token, type)
     connRef.current = conn
     setYMapInstance(conn.yMap)

@@ -53,11 +53,11 @@ export default function CanvasSidebar({ canvases, currentCanvas, onSwitch, onCre
                   className="fixed inset-0 z-10"
                   onClick={() => setShowTypeMenu(false)}
                 />
-                <div className="absolute top-full right-0 mt-1 bg-white shadow-lg rounded-md border py-1 z-20 min-w-[120px]">
-                  {Object.entries(CANVAS_TYPES).map(([key, { label, icon }]) => (
+                <div className="absolute top-full right-0 mt-1 bg-white shadow-lg rounded-md border py-1 z-20 min-w-[160px]">
+                  {Object.entries(CANVAS_TYPES).map(([key, { label, icon, deprecated }]) => (
                     <button
                       key={key}
-                      className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                      className={`block w-full text-left px-3 py-2 text-sm ${deprecated ? 'text-gray-400' : 'hover:bg-gray-100'}`}
                       onClick={() => handleCreate(key)}
                     >
                       {icon} {label}
