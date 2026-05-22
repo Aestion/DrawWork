@@ -64,7 +64,7 @@ CREATE TABLE canvases (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   board_id UUID REFERENCES boards(id) ON DELETE CASCADE NOT NULL,
   name VARCHAR(100) NOT NULL DEFAULT '画布 1',
-  type VARCHAR(20) DEFAULT 'excalidraw' CHECK (type IN ('excalidraw', 'mindmap', 'kanban', 'swimlane')),
+  type VARCHAR(20) DEFAULT 'excalidraw' CHECK (type IN ('excalidraw', 'mindmap', 'jsmind', 'markmap', 'simplemindmap', 'mindelixir', 'kanban', 'swimlane', 'tencentmind')),
   sort_order INTEGER DEFAULT 0,
   yjs_room_id VARCHAR(100) UNIQUE NOT NULL,
   is_deleted BOOLEAN DEFAULT FALSE,

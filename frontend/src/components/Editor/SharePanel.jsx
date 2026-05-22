@@ -56,9 +56,13 @@ export default function SharePanel({ boardId, onClose }) {
         max_uses: linkMaxUses ? parseInt(linkMaxUses) : null
       })
       const link = `${window.location.origin}/s/${res.data.token}`
-      navigator.clipboard.writeText(link)
-        .then(() => alert(`分享链接已生成并复制到剪贴板：${link}`))
-        .catch(() => alert(`分享链接已生成：${link}\n（复制失败，请手动复制）`))
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(link)
+          .then(() => alert(`分享链接已生成并复制到剪贴板：${link}`))
+          .catch(() => alert(`分享链接已生成：${link}\n（复制失败，请手动复制）`))
+      } else {
+        prompt('分享链接（Ctrl+C 复制）：', link)
+      }
       const detail = await api.get(`/boards/${boardId}`)
       setBoardDetail(detail.data)
     } catch (err) {
@@ -77,9 +81,14 @@ export default function SharePanel({ boardId, onClose }) {
   }
 
   const copyLink = (token) => {
-    navigator.clipboard.writeText(`${window.location.origin}/s/${token}`)
-      .then(() => alert('链接已复制到剪贴板'))
-      .catch(() => alert('复制失败，请手动复制'))
+    const link = `${window.location.origin}/s/${token}`
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(link)
+        .then(() => alert('链接已复制到剪贴板'))
+        .catch(() => alert('复制失败，请手动复制'))
+    } else {
+      prompt('分享链接（Ctrl+C 复制）：', link)
+    }
   }
 
   if (loading) {

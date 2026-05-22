@@ -6,6 +6,7 @@
 set -e
 
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+COMPOSE_FILE="$PROJECT_DIR/config/docker-compose.yml"
 
 echo "=== DrawWork 部署脚本 ==="
 echo "项目目录: $PROJECT_DIR"
@@ -17,8 +18,8 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-if ! command -v docker-compose &> /dev/null; then
-    echo "错误: 未安装 Docker Compose"
+if ! docker compose version &> /dev/null; then
+    echo "错误: 未安装 Docker Compose v2"
     exit 1
 fi
 
@@ -26,7 +27,7 @@ fi
 if [ ! -f "$PROJECT_DIR/config/.env" ]; then
     echo "警告: 未找到 config/.env 文件"
     echo "正在从模板创建..."
-    cp "$PROJECT_DIR/config/.env.example" "$PROJECT_DIR/config/.env"
+    cp "$PROJECT_DIR/config/.env.docker" "$PROJECT_DIR/config/.env"
     echo "请编辑 config/.env 文件，修改密码等配置后重新运行"
     exit 1
 fi
@@ -34,7 +35,7 @@ fi
 # 构建并启动服务
 echo "构建并启动服务..."
 cd "$PROJECT_DIR"
-docker-compose up -d --build
+docker compose -f config/docker-compose.yml up -d --build
 
 # 等待服务启动
 echo "等待服务启动..."
@@ -55,7 +56,7 @@ if curl -f http://localhost/health > /dev/null 2>&1; then
     echo "请首次登录后立即修改密码！"
 else
     echo "警告: 服务可能未正常启动"
-    echo "请查看日志: docker-compose logs"
+    echo "请查看日志: docker compose -f config/docker-compose.yml logs"
 fi
 
 echo ""

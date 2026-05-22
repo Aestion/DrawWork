@@ -1,5 +1,17 @@
 node_modules
 npm-debug.log
 .env
+.env.*
 data/
 logs/
+coverage/
+.nyc_output/
+test/
+tests/
+*.test.js
+*.spec.js
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md

@@ -15,12 +15,10 @@ export default function ShareRedirectPage() {
       return
     }
 
-    const consumedKey = 'drawwork_consumed_tokens'
-    const consumedTokens = JSON.parse(localStorage.getItem(consumedKey) || '[]')
-    const alreadyConsumed = consumedTokens.includes(token)
-    const consumeParam = alreadyConsumed ? 'false' : 'true'
+    // Always store the share token so AuthPage can redirect back after login
+    localStorage.setItem('drawwork_share_token', token)
 
-    api.get(`/shares/validate?token=${encodeURIComponent(token)}&consume=${consumeParam}`)
+    api.get(`/shares/validate?token=${encodeURIComponent(token)}`)
       .then((res) => {
         const { board_id, board } = res.data
         if (!board_id) {
@@ -28,20 +26,14 @@ export default function ShareRedirectPage() {
           return
         }
 
-        // Mark token as consumed locally to prevent refresh from burning uses
-        if (!alreadyConsumed) {
-          consumedTokens.push(token)
-          localStorage.setItem(consumedKey, JSON.stringify(consumedTokens))
-        }
-
-        // Store share info for later use (e.g., after login)
         localStorage.setItem('drawwork_share_board_id', board_id)
-        localStorage.setItem('drawwork_share_token', token)
 
         if (authToken) {
+          // Logged in — BoardShare was created by the backend, go to the board
           setStatus(`正在跳转到画板「${board?.name || ''}」...`)
           setTimeout(() => navigate(`/board/${board_id}`), 500)
         } else {
+          // Not logged in — token is stored, AuthPage will redirect back here after login
           setStatus('请先登录以访问该画板')
           setTimeout(() => navigate('/login'), 1500)
         }
