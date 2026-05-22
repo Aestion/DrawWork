@@ -1,6 +1,6 @@
 const { request } = require('@playwright/test')
 
-const API_BASE = 'http://localhost:3000/api'
+const API_BASE = process.env.API_BASE || 'http://localhost:3000/api'
 
 // Create a test user, board, and tencent mind canvas via the API
 async function setupTestEnvironment() {

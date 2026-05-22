@@ -37,6 +37,19 @@ const THEMES = [
 ]
 
 const VIDEO_PLACEHOLDER = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#e2e8f0" rx="6"/><circle cx="60" cy="40" r="16" fill="#64748b"/><polygon points="54,32 54,48 66,40" fill="#fff"/></svg>')
+const INITIAL_DATA_CHANGE_SUPPRESS_MS = 800
+const REMOTE_DATA_CHANGE_SUPPRESS_MS = 5000
+const LOCAL_INTERACTION_GRACE_MS = 3000
+
+function comparableTencentMindSnapshot(data) {
+  if (!data) return ''
+  return JSON.stringify({
+    ...data,
+    relationships: Array.isArray(data.relationships)
+      ? data.relationships.map(({ id, ...relationship }) => relationship)
+      : data.relationships
+  })
+}
 
 // Scan SVG DOM for VIDEO_PLACEHOLDER <image> elements and replace with <foreignObject><video>
 const injectVideoPlaceholders = (containerEl, blobs, apiClient) => {
@@ -117,8 +130,14 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const saveDataRef = useRef(null)
   const remoteUpdateCountRef = useRef(0)
   const applyingRemoteUpdateRef = useRef(false)
+  const hasPendingLocalSaveRef = useRef(false)
+  const ignoreDataChangeUntilRef = useRef(0)
+  const localInteractionUntilRef = useRef(0)
   const lastAppliedRemoteSnapshotRef = useRef('')
+  const lastAppliedRemoteComparableSnapshotRef = useRef('')
   const lastSavedSnapshotRef = useRef('')
+  const lastSavedComparableSnapshotRef = useRef('')
+  const lastBroadcastSnapshotRef = useRef('')
   const [contextMenu, setContextMenu] = useState(null)
   const contextNodeRef = useRef(null)
   const markerMenuRef = useRef(null)
@@ -354,6 +373,61 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     apply(mindMap.renderer.renderTree)
   }
 
+  function applyRemoteDataInPlace(mindMap, smmData, tencentData) {
+    const currentById = new Map()
+    const walkCurrent = (node) => {
+      const realNode = node?._node || node?.data?._node || node
+      const data = realNode?.nodeData?.data || realNode?.data || {}
+      const id = data?._tencentMeta?.id
+      if (id) currentById.set(id, realNode)
+      ;(node?.children || []).forEach(walkCurrent)
+    }
+    walkCurrent(mindMap.renderer.renderTree)
+
+    const incomingById = new Map()
+    const walkIncoming = (node) => {
+      const id = node?.data?._tencentMeta?.id
+      if (id) incomingById.set(id, node)
+      ;(node?.children || []).forEach(walkIncoming)
+    }
+    walkIncoming(smmData)
+
+    if (currentById.size !== incomingById.size) return false
+    for (const id of incomingById.keys()) {
+      if (!currentById.has(id)) return false
+    }
+
+    incomingById.forEach((incoming, id) => {
+      const node = currentById.get(id)
+      const targetData = node?.nodeData?.data || node?.data
+      const sourceData = incoming.data || {}
+      if (!targetData) return
+
+      if (sourceData.text !== undefined && node.getData?.('text') !== sourceData.text && typeof node.setText === 'function') {
+        node.setText(sourceData.text, sourceData.richText, sourceData.resetRichText)
+      } else if (sourceData.text !== undefined) {
+        targetData.text = sourceData.text
+      }
+
+      ;['icon', 'generalization', 'outerFrame', '_uploadId', '_mediaType', '_imageSize'].forEach(key => {
+        if (sourceData[key] !== undefined) {
+          targetData[key] = sourceData[key]
+          if (typeof node.setData === 'function') node.setData(key, sourceData[key])
+        } else if (key in targetData) {
+          delete targetData[key]
+        }
+      })
+    })
+
+    overlaySimpleNodeDataByTencentId(mindMap, smmData)
+    try { restoreAssociativeLines(mindMap, tencentData) } catch (e) { console.error('Remote restore associative lines:', e) }
+    try { restoreGeneralizations(mindMap, tencentData) } catch (e) { console.error('Remote restore generalizations:', e) }
+    try { restoreBoundaries(mindMap, tencentData) } catch (e) { console.error('Remote restore boundaries:', e) }
+    try { restoreAllMarkers(mindMap, tencentData) } catch (e) { console.error('Remote restore markers:', e) }
+    restoreNodeMedia(mindMap).catch(e => console.error('Remote restore media:', e))
+    return true
+  }
+
   async function restoreNodeMedia(mindMap) {
     const walk = async (node) => {
       const realNode = node?._node || node
@@ -410,6 +484,9 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     let mindMap = null
     const onKeyDown = (e) => {
       if (e.key === 'Escape') setContextMenuRef.current(null)
+    }
+    const markLocalInteraction = () => {
+      localInteractionUntilRef.current = Date.now() + LOCAL_INTERACTION_GRACE_MS
     }
 
     // Clear stale blob URLs from previous init (e.g. on remoteUpdateVersion change)
@@ -534,6 +611,10 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         setContextMenuRef.current({ x: e.clientX, y: e.clientY, node })
       })
       document.addEventListener('keydown', onKeyDown)
+      containerRef.current?.addEventListener('pointerdown', markLocalInteraction, true)
+      containerRef.current?.addEventListener('input', markLocalInteraction, true)
+      containerRef.current?.addEventListener('paste', markLocalInteraction, true)
+      document.addEventListener('keydown', markLocalInteraction, true)
 
       // Track active node for media upload
       mindMap.on('node_active', (node) => {
@@ -575,10 +656,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             originDataRef.current = simpleMindMapToTencent(currentData, originDataRef.current)
             const snapshot = JSON.stringify(originDataRef.current)
             lastAppliedRemoteSnapshotRef.current = snapshot
+            lastAppliedRemoteComparableSnapshotRef.current = comparableTencentMindSnapshot(originDataRef.current)
             lastSavedSnapshotRef.current = snapshot
+            lastSavedComparableSnapshotRef.current = lastAppliedRemoteComparableSnapshotRef.current
           }
         } finally {
           setTimeout(() => {
+            ignoreDataChangeUntilRef.current = Date.now() + INITIAL_DATA_CHANGE_SUPPRESS_MS
             applyingRemoteUpdateRef.current = false
           }, 0)
         }
@@ -590,11 +674,21 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       // immediately after the editor opens.
       mindMap.on('data_change', () => {
         if (applyingRemoteUpdateRef.current) return
+        if (Date.now() < ignoreDataChangeUntilRef.current) {
+          const hasRecentLocalInteraction = Date.now() < localInteractionUntilRef.current
+          if (!hasPendingLocalSaveRef.current && !hasRecentLocalInteraction) return
+          const currentData = buildDataTreeFromNodes()
+          if (!currentData) return
+          const snapshot = comparableTencentMindSnapshot(simpleMindMapToTencent(currentData, originDataRef.current))
+          if (snapshot === lastAppliedRemoteComparableSnapshotRef.current || snapshot === lastSavedComparableSnapshotRef.current) return
+        }
+        hasPendingLocalSaveRef.current = true
+        broadcastCurrentData()
         clearTimeout(saveTimerRef.current)
         const snapshotCount = remoteUpdateCountRef.current
         saveTimerRef.current = setTimeout(() => {
           if (applyingRemoteUpdateRef.current) return
-          if (remoteUpdateCountRef.current !== snapshotCount) {
+          if (!hasPendingLocalSaveRef.current && remoteUpdateCountRef.current !== snapshotCount) {
             return
           }
           saveDataRef.current?.()
@@ -608,6 +702,10 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
 
     return () => {
       document.removeEventListener('keydown', onKeyDown)
+      containerRef.current?.removeEventListener('pointerdown', markLocalInteraction, true)
+      containerRef.current?.removeEventListener('input', markLocalInteraction, true)
+      containerRef.current?.removeEventListener('paste', markLocalInteraction, true)
+      document.removeEventListener('keydown', markLocalInteraction, true)
       mounted = false
       // Do NOT clear saveTimerRef — pending saves must complete even when
       // the mind map is destroyed/recreated on remote Yjs updates.
@@ -631,26 +729,41 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     lastRemoteAppliedVersionRef.current = remoteUpdateVersion
     remoteUpdateCountRef.current++
     try {
-      originDataRef.current = yjsTencentData
       const remoteSnapshot = JSON.stringify(yjsTencentData)
+      if (hasPendingLocalSaveRef.current && remoteSnapshot !== lastBroadcastSnapshotRef.current) {
+        return
+      }
+      originDataRef.current = yjsTencentData
       lastAppliedRemoteSnapshotRef.current = remoteSnapshot
+      lastAppliedRemoteComparableSnapshotRef.current = comparableTencentMindSnapshot(yjsTencentData)
       lastSavedSnapshotRef.current = remoteSnapshot
+      lastSavedComparableSnapshotRef.current = lastAppliedRemoteComparableSnapshotRef.current
       applyingRemoteUpdateRef.current = true
+      ignoreDataChangeUntilRef.current = Date.now() + REMOTE_DATA_CHANGE_SUPPRESS_MS
       clearTimeout(saveTimerRef.current)
       const smmData = tencentToSimpleMindMap(yjsTencentData)
-      mmRef.current.setData(smmData)
-      mmRef.current.render(() => {
-        overlaySimpleNodeDataByTencentId(mmRef.current, smmData)
-        // Re-apply imperative features destroyed by setData+render
-        try { restoreAssociativeLines(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore associative lines:', e) }
-        try { restoreGeneralizations(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore generalizations:', e) }
-        try { restoreBoundaries(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore boundaries:', e) }
-        try { restoreAllMarkers(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore markers:', e) }
-        restoreNodeMedia(mmRef.current).catch(e => console.error('Remote restore media:', e))
+      const appliedInPlace = applyRemoteDataInPlace(mmRef.current, smmData, yjsTencentData)
+      if (!appliedInPlace) {
+        mmRef.current.setData(smmData)
+        mmRef.current.render(() => {
+          overlaySimpleNodeDataByTencentId(mmRef.current, smmData)
+          // Re-apply imperative features destroyed by setData+render
+          try { restoreAssociativeLines(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore associative lines:', e) }
+          try { restoreGeneralizations(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore generalizations:', e) }
+          try { restoreBoundaries(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore boundaries:', e) }
+          try { restoreAllMarkers(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore markers:', e) }
+          restoreNodeMedia(mmRef.current).catch(e => console.error('Remote restore media:', e))
+          setTimeout(() => {
+            ignoreDataChangeUntilRef.current = Date.now() + REMOTE_DATA_CHANGE_SUPPRESS_MS
+            applyingRemoteUpdateRef.current = false
+          }, 0)
+        })
+      } else {
         setTimeout(() => {
+          ignoreDataChangeUntilRef.current = Date.now() + REMOTE_DATA_CHANGE_SUPPRESS_MS
           applyingRemoteUpdateRef.current = false
         }, 0)
-      })
+      }
     } catch (err) {
       applyingRemoteUpdateRef.current = false
       console.error('[YJS-REMOTE] Failed to apply remote update:', err)
@@ -884,6 +997,8 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       originDataRef.current = tencentData
       await api.put(`/canvases/${canvasId}/tencentmind`, { data: tencentData })
       lastSavedSnapshotRef.current = snapshot
+      lastSavedComparableSnapshotRef.current = comparableTencentMindSnapshot(tencentData)
+      hasPendingLocalSaveRef.current = false
       if (!skipYjs) syncToYjs(tencentData)
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
@@ -891,6 +1006,18 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   }, [canvasId, syncToYjs])
 
   saveDataRef.current = saveData
+
+  const broadcastCurrentData = useCallback(() => {
+    if (!originDataRef.current || !mmRef.current) return
+    const currentData = buildDataTreeFromNodes()
+    if (!currentData) return
+    const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
+    const snapshot = JSON.stringify(tencentData)
+    if (snapshot === lastBroadcastSnapshotRef.current || snapshot === lastAppliedRemoteSnapshotRef.current) return
+    originDataRef.current = tencentData
+    lastBroadcastSnapshotRef.current = snapshot
+    syncToYjs(tencentData)
+  }, [syncToYjs])
 
   const handleLayoutChange = useCallback((layout) => {
     setCurrentLayout(layout)

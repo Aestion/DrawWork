@@ -13,7 +13,9 @@ vi.mock('./useYjs', () => ({
       set: vi.fn(),
       toJSON: vi.fn(() => ({})),
       observe: vi.fn(() => {}),
-      unobserve: vi.fn()
+      unobserve: vi.fn(),
+      observeDeep: vi.fn(() => {}),
+      unobserveDeep: vi.fn()
     }
   }))
 }))

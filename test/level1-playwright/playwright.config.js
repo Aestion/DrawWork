@@ -14,7 +14,7 @@ module.exports = defineConfig({
   reporter: [['list'], ['html', { outputFolder: '../results/reports/html' }]],
   outputDir: '../results/test-results',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
     trace: 'on-first-retry',
     screenshot: 'on',
     video: 'retain-on-failure',

@@ -19,6 +19,8 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   const debounceRef = useRef(null)
   const initialDataLoaded = useRef(false)
   const tencentDataRef = useRef(null)
+  const lastObservedSnapshotRef = useRef('')
+  const lastLocalSnapshotRef = useRef('')
 
   const { connected, synced, onlineCount, yMap, updateAwareness, getAwarenessStates } = useYjs(roomId, token, { type: 'tencentmind' })
 
@@ -38,6 +40,7 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   const syncToYjs = useCallback((data) => {
     if (!yMap || !canEdit) return
     try {
+      lastLocalSnapshotRef.current = JSON.stringify(data)
       yMap.doc.transact(() => {
         yMap.set('__tencent_state', data)
       }, 'local-tencentmind-change')
@@ -50,35 +53,80 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   useEffect(() => {
     if (!yMap) return
 
-    const observer = (event) => {
-      // Ignore only writes initiated by this hook. Provider-applied remote
-      // updates also mutate the local Y.Doc, so transaction.local is too broad.
-      if (event.transaction?.origin === 'local-tencentmind-change') return
-      const raw = yMap.get('__tencent_state')
-      if (!raw) {
-        // Yjs initial sync fires observe before __tencent_state is written;
-        // the HTTP primary loader handles actual data loading.
+    const applyObservedData = () => {
+      const data = extractTencentData(yMap)
+      if (!data) {
         console.debug('[YJS-OBS] observer fired but __tencent_state not yet available')
         return
       }
-      // yMap.get() returns a Y.Map for nested objects — convert to plain object
-      const data = typeof raw.toJSON === 'function' ? raw.toJSON() : raw
-
-      // Don't set initialDataLoaded.current or setLoading(false) here.
-      // The HTTP primary loader is the source of truth and must run first.
-      // Yjs may have stale data from a previous session's auto-save that ran
-      // before restoration completed, causing permanent data loss.
+      const snapshot = JSON.stringify(data)
+      if (snapshot === lastLocalSnapshotRef.current) return
+      if (snapshot === lastObservedSnapshotRef.current) return
+      lastObservedSnapshotRef.current = snapshot
       setTencentData(data)
-
-      // Defer version increment so React processes the state first
       Promise.resolve().then(() => {
         setRemoteUpdateVersion((v) => v + 1)
       })
     }
 
+    const observer = (events) => {
+      const eventList = Array.isArray(events) ? events : [events]
+      // Ignore only writes initiated by this hook. Provider-applied remote
+      // updates also mutate the local Y.Doc, so transaction.local is too broad.
+      if (eventList.every(event => event.transaction?.origin === 'local-tencentmind-change')) return
+      applyObservedData()
+    }
+
+    const docObserver = (_update, origin) => {
+      if (origin === 'local-tencentmind-change') return
+      Promise.resolve().then(applyObservedData)
+    }
+
+    yMap.doc?.on?.('update', docObserver)
+    if (typeof yMap.observeDeep === 'function') {
+      yMap.observeDeep(observer)
+      return () => {
+        yMap.unobserveDeep(observer)
+        yMap.doc?.off?.('update', docObserver)
+      }
+    }
     yMap.observe(observer)
-    return () => yMap.unobserve(observer)
+    return () => {
+      yMap.unobserve(observer)
+      yMap.doc?.off?.('update', docObserver)
+    }
   }, [yMap])
+
+  // HTTP safety net: Yjs is still the fast path, but the persisted TencentMind
+  // snapshot is the authoritative fallback in production Docker deployments.
+  useEffect(() => {
+    if (!canvasId || !token) return
+
+    let stopped = false
+    const poll = async () => {
+      if (stopped || !initialDataLoaded.current) return
+      try {
+        const res = await api.get(`/canvases/${canvasId}/tencentmind`)
+        const data = res.data?.data
+        if (!data?.rootTopic) return
+        const snapshot = JSON.stringify(data)
+        if (snapshot === lastObservedSnapshotRef.current) return
+        lastObservedSnapshotRef.current = snapshot
+        setTencentData(data)
+        Promise.resolve().then(() => {
+          setRemoteUpdateVersion((v) => v + 1)
+        })
+      } catch (err) {
+        // The primary save path will surface real failures; polling must stay quiet.
+      }
+    }
+
+    const interval = setInterval(poll, 1500)
+    return () => {
+      stopped = true
+      clearInterval(interval)
+    }
+  }, [canvasId, token])
 
   // Fallback: load from HTTP if Yjs doesn't connect within 2 seconds
   const yMapRef = useRef(null)
@@ -93,7 +141,7 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
 
       const loadFromHttp = async () => {
         try {
-          // HTTP API is the source of truth — always fetch from it.
+          // HTTP API is the source of truth �?always fetch from it.
           // The YMap shortcut was removed because Yjs may have stale
           // data from a previous session that lacks boundaries.
           const res = await api.get(`/canvases/${canvasId}/tencentmind`)

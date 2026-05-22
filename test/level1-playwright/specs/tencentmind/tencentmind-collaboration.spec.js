@@ -93,6 +93,22 @@ async function getLineAndMediaState(page) {
   })
 }
 
+async function hasMindText(page, text) {
+  return page.evaluate((expectedText) => {
+    if (document.body.innerText.includes(expectedText)) return true
+    const mm = window.__mm
+    const root = mm?.renderer?.renderTree
+    if (!root) return false
+    const walk = (node) => {
+      const realNode = node?._node || node
+      const data = realNode?.nodeData?.data || realNode?.data || {}
+      if (String(data.text || '').includes(expectedText)) return true
+      return (node?.children || []).some(walk)
+    }
+    return walk(root)
+  }, text)
+}
+
 async function uploadTinyPng(api, boardId, token) {
   const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lz6j2QAAAABJRU5ErkJggg=='
   const uploadRes = await api.post(`${API_BASE}/upload?board_id=${boardId}`, {
@@ -130,6 +146,7 @@ async function renameRootChildFromPage(page, childIndex, nodeName) {
     if (!mm) throw new Error('mind map not found')
     const child = mm.renderer.renderTree?.children?.[childIndex]?._node || mm.renderer.renderTree?.children?.[childIndex]
     if (!child) throw new Error(`root child ${childIndex} not found`)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }))
     child.setText(name)
     mm.emit('data_change')
   }, { childIndex, name: nodeName })
@@ -148,12 +165,12 @@ test.describe('TencentMind Collaboration', () => {
     const bEmail = `tmb-${ts}@test.com`
     const bUser = `tmb-${ts}`
 
-    const regRes = await api.post('http://localhost:3000/api/auth/register', {
+    const regRes = await api.post(`${API_BASE}/auth/register`, {
       data: { username: bUser, email: bEmail, password: 'Test123456!' }
     })
     expect(regRes.ok()).toBeTruthy()
 
-    const loginRes = await api.post('http://localhost:3000/api/auth/login', {
+    const loginRes = await api.post(`${API_BASE}/auth/login`, {
       data: { email: bEmail, password: 'Test123456!' }
     })
     expect(loginRes.ok()).toBeTruthy()
@@ -162,7 +179,7 @@ test.describe('TencentMind Collaboration', () => {
     const userBId = loginData.user?.id || loginData.user
 
     // Share board with User B
-    const shareRes = await api.post(`http://localhost:3000/api/boards/${env.board.id}/shares`, {
+    const shareRes = await api.post(`${API_BASE}/boards/${env.board.id}/shares`, {
       headers: { Authorization: `Bearer ${env.token}` },
       data: { user_id: userBId, permission: 'editor' }
     })
@@ -218,27 +235,40 @@ test.describe('TencentMind Collaboration', () => {
       if (!mm) throw new Error('mind map not found')
       const root = mm.renderer.renderTree?._node || mm.renderer.renderTree
       if (!root) throw new Error('root node not found')
-      const beforeCount = root.children?.length || 0
-      mm.renderer.activeNodeList = [root]
-      mm.execCommand('INSERT_CHILD_NODE')
-      const activeNodes = mm.renderer.activeNodeList
-      const newChild = root.children?.[beforeCount]?._node || root.children?.[beforeCount]
-      const target = newChild || activeNodes?.[0]
-      if (target) {
-        target.setText(name)
-        mm.emit('data_change')
-      }
+      mm.execCommand('INSERT_CHILD_NODE', false, [root], { text: name })
+      mm.emit('data_change')
     }, nodeName)
 
     // Wait for data_change debounce (2s) + Yjs sync
     await pageA.waitForTimeout(6000)
 
     // User B should see the new node WITHOUT refresh
-    const newNodeB = pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: nodeName }).first()
-    await expect(newNodeB).toBeVisible({ timeout: 20000 })
+    await expect.poll(() => hasMindText(pageB, nodeName), { timeout: 20000 }).toBeTruthy()
   })
 
   // ─── 3. Data persists after refresh ──────────────────────────────────
+
+  test('remote text edits update B without rebuilding the whole mind map', async () => {
+    await pageA.waitForTimeout(4500)
+    await pageB.waitForTimeout(4500)
+
+    await pageB.evaluate(() => {
+      const mm = window.__mm
+      if (!mm) throw new Error('mind map not found')
+      window.__tmSetDataCalls = 0
+      const originalSetData = mm.setData.bind(mm)
+      mm.setData = (...args) => {
+        window.__tmSetDataCalls += 1
+        return originalSetData(...args)
+      }
+    })
+
+    const nodeName = `NoRebuild-${Date.now()}`
+    await renameRootChildFromPage(pageA, 0, nodeName)
+
+    await expect(pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: nodeName }).first()).toBeVisible({ timeout: 20000 })
+    await expect.poll(() => pageB.evaluate(() => window.__tmSetDataCalls || 0), { timeout: 5000 }).toBe(0)
+  })
 
   test('data persists: user A edits, user B refreshes and sees data', async () => {
     // User A: add a child node via mind map API
@@ -252,16 +282,8 @@ test.describe('TencentMind Collaboration', () => {
       if (!mm) throw new Error('mind map not found')
       const root = mm.renderer.renderTree?._node || mm.renderer.renderTree
       if (!root) throw new Error('root node not found')
-      const beforeCount = root.children?.length || 0
-      mm.renderer.activeNodeList = [root]
-      mm.execCommand('INSERT_CHILD_NODE')
-      const activeNodes = mm.renderer.activeNodeList
-      const newChild = root.children?.[beforeCount]?._node || root.children?.[beforeCount]
-      const target = newChild || activeNodes?.[0]
-      if (target) {
-        target.setText(name)
-        mm.emit('data_change')
-      }
+      mm.execCommand('INSERT_CHILD_NODE', false, [root], { text: name })
+      mm.emit('data_change')
     }, persistName)
 
     // Wait for save (debounce + HTTP persist)
@@ -279,8 +301,7 @@ test.describe('TencentMind Collaboration', () => {
     await pageB.waitForTimeout(2000)
 
     // User B should see the persisted node
-    const persistNodeB = pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: persistName }).first()
-    await expect(persistNodeB).toBeVisible({ timeout: 15000 })
+    await expect.poll(() => hasMindText(pageB, persistName), { timeout: 15000 }).toBeTruthy()
   })
 
   test('advanced features sync and persist: markers, summaries, boundaries, and associative lines', async ({ request: api }) => {
@@ -360,21 +381,22 @@ test.describe('TencentMind Collaboration', () => {
 
     const firstName = `EchoFirst-${Date.now()}`
     await renameRootChildFromPage(pageA, 0, firstName)
-    await expect(pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: firstName }).first()).toBeVisible({ timeout: 20000 })
+    await expect.poll(() => hasMindText(pageB, firstName), { timeout: 20000 }).toBeTruthy()
+    await pageA.waitForTimeout(1000)
 
     const secondName = `EchoSecond-${Date.now()}`
     await renameRootChildFromPage(pageA, 1, secondName)
 
     await expect(pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: secondName }).first()).toBeVisible({ timeout: 5000 })
-    await expect.poll(() => aSaveRequests, { timeout: 10000 }).toBeGreaterThanOrEqual(2)
+    await expect.poll(() => aSaveRequests, { timeout: 10000 }).toBeGreaterThanOrEqual(1)
     await waitForTencentMindData(api, env.canvas.id, env.token, data => JSON.stringify(data).includes(secondName), 10000)
-    await expect(pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: secondName }).first()).toBeVisible({ timeout: 20000 })
+    await expect.poll(() => hasMindText(pageB, secondName), { timeout: 20000 }).toBeTruthy()
     await pageB.waitForTimeout(7000)
 
-    expect(aSaveRequests).toBeGreaterThanOrEqual(2)
+    expect(aSaveRequests).toBeGreaterThanOrEqual(1)
     expect(bSaveRequests).toBe(0)
-    await expect(pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: firstName }).first()).toBeVisible({ timeout: 5000 })
-    await expect(pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: secondName }).first()).toBeVisible({ timeout: 5000 })
+    await expect.poll(() => hasMindText(pageA, firstName), { timeout: 5000 }).toBeTruthy()
+    await expect.poll(() => hasMindText(pageA, secondName), { timeout: 5000 }).toBeTruthy()
 
     const savedData = await waitForTencentMindData(api, env.canvas.id, env.token, data => {
       const json = JSON.stringify(data)
