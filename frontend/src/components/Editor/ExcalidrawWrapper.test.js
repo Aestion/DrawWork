@@ -47,7 +47,14 @@ if (typeof globalThis.Path2D === 'undefined') {
   }
 }
 
-import { stableSceneSignature, filterOversizedEmbeddedFiles, shouldFadeDeletedElement } from './ExcalidrawWrapper'
+import * as Y from 'yjs'
+import {
+  stableSceneSignature,
+  filterOversizedEmbeddedFiles,
+  shouldFadeDeletedElement,
+  decodeSnapshotScene,
+  sceneFromYMapJson
+} from './ExcalidrawWrapper'
 
 describe('stableSceneSignature', () => {
   it('produces same signature for identical data', () => {
@@ -218,6 +225,37 @@ describe('stableSceneSignature', () => {
   it('appState.null does not crash', () => {
     const sig = stableSceneSignature([{ id: 'a' }], null, {})
     expect(typeof sig).toBe('string')
+  })
+})
+
+describe('snapshot decoding', () => {
+  it('converts per-element Yjs map JSON into an Excalidraw scene', () => {
+    const scene = sceneFromYMapJson({
+      __el_rect1: { id: 'rect1', type: 'rectangle', x: 10 },
+      __el_text1: { id: 'text1', type: 'text', text: 'hello' },
+      __appState: { viewBackgroundColor: '#ffeecc' },
+      __files: { file1: { mimeType: 'image/png' } }
+    })
+
+    expect(scene.elements.map((el) => el.id)).toEqual(['rect1', 'text1'])
+    expect(scene.appState.viewBackgroundColor).toBe('#ffeecc')
+    expect(scene.files.file1.mimeType).toBe('image/png')
+  })
+
+  it('decodes binary Yjs snapshots that store elements under __el_ keys', () => {
+    const doc = new Y.Doc()
+    const yMap = doc.getMap('excalidraw')
+    yMap.set('__el_rect1', { id: 'rect1', type: 'rectangle', x: 10 })
+    yMap.set('__appState', { viewBackgroundColor: '#ffffff' })
+    yMap.set('__files', {})
+    const update = Y.encodeStateAsUpdate(doc)
+    const base64 = btoa(String.fromCharCode(...update))
+    doc.destroy()
+
+    const scene = decodeSnapshotScene(base64)
+
+    expect(scene.elements).toHaveLength(1)
+    expect(scene.elements[0]).toMatchObject({ id: 'rect1', type: 'rectangle' })
   })
 })
 

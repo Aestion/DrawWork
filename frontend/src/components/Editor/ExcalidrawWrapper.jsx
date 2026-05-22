@@ -221,6 +221,54 @@ export function filterOversizedEmbeddedFiles(scene, maxBytes) {
   return { elements, files }
 }
 
+export function sceneFromYMapJson(json = {}) {
+  const elements = []
+  const perElementKeys = Object.keys(json)
+    .filter((key) => key.startsWith('__el_'))
+    .sort()
+
+  if (perElementKeys.length > 0) {
+    perElementKeys.forEach((key) => {
+      if (json[key]) elements.push(json[key])
+    })
+  } else if (Array.isArray(json.elements)) {
+    elements.push(...json.elements)
+  }
+
+  return {
+    elements,
+    appState: json.__appState || json.appState || {},
+    files: json.__files || json.files || {}
+  }
+}
+
+function decodeBase64ToBinaryString(base64Data) {
+  if (typeof atob === 'function') return atob(base64Data)
+  return Buffer.from(base64Data, 'base64').toString('binary')
+}
+
+function decodeBase64ToUtf8(base64Data) {
+  const binary = decodeBase64ToBinaryString(base64Data)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
+export function decodeSnapshotScene(base64Data) {
+  try {
+    return sceneFromYMapJson(JSON.parse(decodeBase64ToUtf8(base64Data)))
+  } catch {
+    const binary = decodeBase64ToBinaryString(base64Data)
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const doc = new Y.Doc()
+    try {
+      Y.applyUpdate(doc, bytes)
+      return sceneFromYMapJson(doc.getMap('excalidraw').toJSON())
+    } finally {
+      doc.destroy()
+    }
+  }
+}
+
 const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, roomId, canEdit, boardId, onConnectionChange, isActive = true }, ref) {
   const containerRef = useRef(null)
   const excalidrawRef = useRef(null)
@@ -717,33 +765,11 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
           if (currentElements.length > 0) return
         }
 
-        const decoded = atob(res.data.data)
         let nextScene
-
-        // Try JSON format first (HTTP snapshot from beforeunload handler)
         try {
-          const json = JSON.parse(decoded)
-          nextScene = {
-            elements: Array.isArray(json?.elements) ? [...json.elements] : [],
-            appState: json?.appState || {},
-            files: json?.files || {}
-          }
+          nextScene = decodeSnapshotScene(res.data.data)
         } catch {
-          // Fallback: Yjs binary format (from yjs-server persistence)
-          try {
-            const binary = Uint8Array.from(decoded, (char) => char.charCodeAt(0))
-            const doc = new Y.Doc()
-            Y.applyUpdate(doc, binary)
-            const json = doc.getMap('excalidraw').toJSON()
-            nextScene = {
-              elements: Array.isArray(json?.elements) ? [...json.elements] : [],
-              appState: json?.appState || {},
-              files: json?.files || {}
-            }
-            doc.destroy()
-          } catch {
-            return // Both formats failed, skip
-          }
+          return
         }
 
         sceneRef.current = nextScene
@@ -1281,13 +1307,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     },
     loadData(base64Data) {
       try {
-        const json = decodeURIComponent(escape(atob(base64Data)))
-        const data = JSON.parse(json)
-        const nextScene = {
-          elements: Array.isArray(data?.elements) ? data.elements : [],
-          appState: data?.appState || {},
-          files: data?.files || {}
-        }
+        const nextScene = decodeSnapshotScene(base64Data)
         sceneRef.current = nextScene
         if (excalidrawRef.current) {
           remoteApplyRef.current = true
