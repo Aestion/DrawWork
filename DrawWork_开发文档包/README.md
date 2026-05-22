@@ -51,3 +51,22 @@
 
 *DrawWork Development Team*
 *2026-05-18*
+
+---
+
+## 2026-05-22 实时协同与删除闪回修复
+
+- 新增记录：[10_2026-05-22_实时协同与删除闪回修复记录.md](./10_2026-05-22_实时协同与删除闪回修复记录.md)
+- 覆盖问题：腾讯思维 A/B 分享协同时 B 端不实时刷新；Excalidraw 普通元素删除后短暂闪回。
+- 验收范围：腾讯思维实时同步、腾讯思维刷新持久化、Excalidraw 单元素删除协同、前端单测与生产构建。
+
+---
+
+## 2026-05-22 项目现状补充
+
+- 代码结构：后端在 `backend/src`，核心 REST API 位于 `routes/`，权限由 `middleware/permission.js` 统一判断；前端在 `frontend/src`，主要页面为 Dashboard、Editor、ShareRedirect；协同服务在 `yjs-server/src/server.js`。
+- 分享协同链路：画板 owner 通过 `POST /api/boards/:id/shares` 直邀用户，或通过 `POST /api/boards/:id/tokens` 生成分享链接；访问 `/s/:token` 时前端调用 `GET /api/shares/validate` 验证并跳转。
+- 分享链接计数规则：匿名打开链接只做预览验证，不消耗 `max_uses`；只有登录用户首次通过 token 获得画板访问权时，后端才在事务内创建 `BoardShare` 并递增 `used_count`；已获得访问权的用户刷新链接不重复计数。
+- 测试入口：分享相关后端覆盖在 `backend/src/__tests__/shares.test.js` 和 `backend/src/__tests__/shareValidate.test.js`；Level 1 浏览器覆盖在 `test/level1-playwright/specs/share.spec.js`、`share-link.spec.js`、`collaboration.spec.js`。
+- 本次验收命令：`cd backend && npm test -- --runTestsByPath src/__tests__/shares.test.js src/__tests__/shareValidate.test.js src/__tests__/notifications.test.js src/__tests__/boards.test.js src/__tests__/snapshots.test.js`，当前结果 5 suites / 32 tests 通过。
+- 本次新增详档：[09_2026-05-22_项目理解与分享协同验收.md](./09_2026-05-22_项目理解与分享协同验收.md)

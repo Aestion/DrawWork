@@ -51,13 +51,14 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
     if (!yMap) return
 
     const observer = (event) => {
-      // Use transaction.local (Yjs built-in) instead of comparing origin strings.
-      // Both users write with origin 'local-tencentmind-change', so checking the
-      // origin string would cause user B to incorrectly ignore user A's changes.
-      if (event.transaction?.local) return
+      // Ignore only writes initiated by this hook. Provider-applied remote
+      // updates also mutate the local Y.Doc, so transaction.local is too broad.
+      if (event.transaction?.origin === 'local-tencentmind-change') return
       const raw = yMap.get('__tencent_state')
       if (!raw) {
-        console.warn('[YJS-OBS] observer fired but __tencent_state is null/undefined')
+        // Yjs initial sync fires observe before __tencent_state is written;
+        // the HTTP primary loader handles actual data loading.
+        console.debug('[YJS-OBS] observer fired but __tencent_state not yet available')
         return
       }
       // yMap.get() returns a Y.Map for nested objects — convert to plain object

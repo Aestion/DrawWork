@@ -204,3 +204,16 @@
 | **性能基线** | 旧脚本 (已废弃) | 暂不纳入 (性能监控更适合手动+CI dashboard) |
 | **移动端视口** | ❌ 无 | 暂不纳入 |
 | **ARIA 无障碍** | ❌ 无 | 暂不纳入 |
+
+---
+
+## 2026-05-22 分享协同测试补充
+
+- `backend/src/__tests__/shareValidate.test.js` 从 3 个用例扩展到 5 个用例，新增：
+  - 匿名分享链接预览不消耗 `max_uses`。
+  - 登录用户首次通过 token 获得访问权时创建 `BoardShare(source=token)`，并且 `used_count` 精确增加到 1。
+- `test/level1-playwright/specs/share-link.spec.js` 从 1 个用例扩展到 2 个用例，新增：
+  - 分享链接 `max_uses=1` 时，匿名预览不计数，首个登录用户可加入，第二个登录用户被 400 拒绝。
+- 推荐验收命令：
+  - `cd backend && npm test -- --runTestsByPath src/__tests__/shares.test.js src/__tests__/shareValidate.test.js src/__tests__/notifications.test.js src/__tests__/boards.test.js src/__tests__/snapshots.test.js`
+  - `cd test/level1-playwright && npx playwright test specs/share-link.spec.js --config playwright.config.js`

@@ -202,6 +202,10 @@ function buildRenderableFiles(files) {
 // Laser pointer fade timeout (remote elements received via Yjs)
 const LASER_FADE_MS = 2000
 
+export function shouldFadeDeletedElement(element) {
+  return element?.type === 'freedraw' && element?.isDeleted === true
+}
+
 export function filterOversizedEmbeddedFiles(scene, maxBytes) {
   const validFileIds = new Set()
   const files = {}
@@ -546,7 +550,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
 
     // 2. Start fade timer for newly deleted laser pointer elements
     mergedElements.forEach((el) => {
-      if (el.isDeleted && !laserElementsRef.current.has(el.id)) {
+      if (shouldFadeDeletedElement(el) && !laserElementsRef.current.has(el.id)) {
         const timeoutId = setTimeout(() => {
           laserElementsRef.current.delete(el.id)
           const api = excalidrawRef.current
@@ -561,7 +565,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
 
     // 3. Temporarily undelete laser elements so they render during fade
     const visibleElements = mergedElements.map((el) => {
-      if (el.isDeleted && laserElementsRef.current.has(el.id)) {
+      if (shouldFadeDeletedElement(el) && laserElementsRef.current.has(el.id)) {
         return { ...el, isDeleted: false }
       }
       return el

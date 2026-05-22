@@ -216,10 +216,16 @@ test.describe('TencentMind Collaboration', () => {
     await pageA.evaluate((name) => {
       const mm = window.__mm
       if (!mm) throw new Error('mind map not found')
+      const root = mm.renderer.renderTree?._node || mm.renderer.renderTree
+      if (!root) throw new Error('root node not found')
+      const beforeCount = root.children?.length || 0
+      mm.renderer.activeNodeList = [root]
       mm.execCommand('INSERT_CHILD_NODE')
       const activeNodes = mm.renderer.activeNodeList
-      if (activeNodes && activeNodes.length > 0) {
-        activeNodes[0].setText(name)
+      const newChild = root.children?.[beforeCount]?._node || root.children?.[beforeCount]
+      const target = newChild || activeNodes?.[0]
+      if (target) {
+        target.setText(name)
         mm.emit('data_change')
       }
     }, nodeName)
@@ -244,10 +250,16 @@ test.describe('TencentMind Collaboration', () => {
     await pageA.evaluate((name) => {
       const mm = window.__mm
       if (!mm) throw new Error('mind map not found')
+      const root = mm.renderer.renderTree?._node || mm.renderer.renderTree
+      if (!root) throw new Error('root node not found')
+      const beforeCount = root.children?.length || 0
+      mm.renderer.activeNodeList = [root]
       mm.execCommand('INSERT_CHILD_NODE')
       const activeNodes = mm.renderer.activeNodeList
-      if (activeNodes && activeNodes.length > 0) {
-        activeNodes[0].setText(name)
+      const newChild = root.children?.[beforeCount]?._node || root.children?.[beforeCount]
+      const target = newChild || activeNodes?.[0]
+      if (target) {
+        target.setText(name)
         mm.emit('data_change')
       }
     }, persistName)

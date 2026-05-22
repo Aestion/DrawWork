@@ -47,7 +47,7 @@ if (typeof globalThis.Path2D === 'undefined') {
   }
 }
 
-import { stableSceneSignature, filterOversizedEmbeddedFiles } from './ExcalidrawWrapper'
+import { stableSceneSignature, filterOversizedEmbeddedFiles, shouldFadeDeletedElement } from './ExcalidrawWrapper'
 
 describe('stableSceneSignature', () => {
   it('produces same signature for identical data', () => {
@@ -294,5 +294,13 @@ describe('filterOversizedEmbeddedFiles', () => {
     const result = filterOversizedEmbeddedFiles(scene, 0)
     expect(result.files.f1).toBeUndefined()
     expect(result.elements).toHaveLength(0)
+  })
+})
+
+describe('shouldFadeDeletedElement', () => {
+  it('only fades deleted freedraw laser elements', () => {
+    expect(shouldFadeDeletedElement({ id: 'line-1', type: 'freedraw', isDeleted: true })).toBe(true)
+    expect(shouldFadeDeletedElement({ id: 'rect-1', type: 'rectangle', isDeleted: true })).toBe(false)
+    expect(shouldFadeDeletedElement({ id: 'line-2', type: 'freedraw', isDeleted: false })).toBe(false)
   })
 })

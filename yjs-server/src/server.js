@@ -11,15 +11,16 @@ const fs = require('fs')
  * For E2E testing, see backend/src/ws-server.js (simpler, no persistence).
  */
 
-// Load config from root directory first, fallback to local
+// Load root config first, then local config (overrides root)
 const rootEnv = path.resolve(__dirname, '../../.env')
 const localEnv = path.resolve(__dirname, '../.env')
 if (fs.existsSync(rootEnv)) {
   require('dotenv').config({ path: rootEnv })
-  console.log('[Config] Loaded from root .env')
-} else {
-  require('dotenv').config({ path: localEnv })
-  console.log('[Config] Loaded from local .env')
+  console.log('[Config] Loaded root .env')
+}
+if (fs.existsSync(localEnv)) {
+  require('dotenv').config({ path: localEnv, override: true })
+  console.log('[Config] Loaded local .env (overrides root)')
 }
 
 const WebSocket = require('ws')
@@ -480,12 +481,12 @@ wss.on('connection', async (ws, req) => {
     userConnections.get(authUser.userId).add(ws)
     roomConnections.set(roomName, (roomConnections.get(roomName) || 0) + 1)
 
-    // Register WS message handler before loading doc snapshot.
-    // getOrCreateDoc awaits DB load which yields the event loop; the client's
-    // initial SyncStep1 arrives during that yield and is dropped if no handler
-    // exists, so the server never sends SyncStep2 back and synced stays false.
-    setupWSConnection(ws, req, { docName: roomName })
+    // Load the Yjs doc snapshot BEFORE registering the WS message handler.
+    // If setupWSConnection runs first, it sends SyncStep1 with an empty doc
+    // state while getOrCreateDoc is still loading. The client syncs to the
+    // empty state, causing permanent data loss.
     await getOrCreateDoc(roomName, meta.canvasId)
+    setupWSConnection(ws, req, { docName: roomName })
 
     ws.on('close', async () => {
       const connections = userConnections.get(authUser.userId)
@@ -624,11 +625,26 @@ async function validateSetup() {
   }
 }
 
-// Start server after validation
+// Start server after validation, with port fallback on EADDRINUSE
 validateSetup().then(() => {
-  server.listen(PORT, () => {
-    console.log(`[Yjs] WebSocket server running on port ${PORT}`)
-  })
+  const MAX_ATTEMPTS = 10
+  function tryListen(port, attempt) {
+    server.once('error', (err) => {
+      if (err.code === 'EADDRINUSE' && attempt < MAX_ATTEMPTS) {
+        const next = port + 1
+        console.warn(`[Yjs] Port ${port} in use, trying ${next}...`)
+        server.removeAllListeners('error')
+        tryListen(next, attempt + 1)
+      } else {
+        console.error(`[Yjs] Cannot bind to port ${port}: ${err.code}`)
+        process.exit(1)
+      }
+    })
+    server.listen(port, () => {
+      console.log(`[Yjs] WebSocket server running on port ${port}`)
+    })
+  }
+  tryListen(PORT, 1)
 }).catch(err => {
   console.error('[Yjs] Startup validation failed:', err)
   process.exit(1)

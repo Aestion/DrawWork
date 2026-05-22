@@ -66,12 +66,16 @@ export default function EditorPage() {
   const [showVersionHistory, setShowVersionHistory] = useState(false)
   const [showVotePanel, setShowVotePanel] = useState(false)
   const [initialLoadDone, setInitialLoadDone] = useState(false)
+  const [authInitDone, setAuthInitDone] = useState(false)
   const [mountedCanvases, setMountedCanvases] = useState(new Set())
 
   // Track which canvases have been mounted for keep-alive
   useEffect(() => {
     if (currentCanvas?.id) {
+      activeCanvasIdRef.current = currentCanvas.id
       setMountedCanvases(prev => new Set([...prev, currentCanvas.id]))
+    } else {
+      activeCanvasIdRef.current = null
     }
   }, [currentCanvas?.id])
 
@@ -161,9 +165,16 @@ export default function EditorPage() {
   }, [boardId])
 
   useEffect(() => {
-    init()
+    init().finally(() => setAuthInitDone(true))
     return () => reset()
   }, [])
+
+  // Redirect to login if auth init completed without a user (expired session)
+  useEffect(() => {
+    if (authInitDone && !user) {
+      navigate('/login')
+    }
+  }, [authInitDone, user, navigate])
 
   // Fetch boards if not loaded
   useEffect(() => {

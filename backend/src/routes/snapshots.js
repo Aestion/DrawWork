@@ -3,6 +3,10 @@ const { authMiddleware } = require('../middleware/auth')
 const { checkCanvasPermission } = require('../middleware/permission')
 const { YjsSnapshot, User } = require('../models')
 
+function serializeCreatedAt(snapshot) {
+  return snapshot.createdAt || snapshot.created_at
+}
+
 // GET /api/canvases/:id/snapshot — 获取画布最新快照
 router.get('/:id/snapshot', authMiddleware, checkCanvasPermission('viewer'), async (req, res, next) => {
   try {
@@ -19,7 +23,7 @@ router.get('/:id/snapshot', authMiddleware, checkCanvasPermission('viewer'), asy
     res.json({
       exists: true,
       data: Buffer.from(snapshot.content).toString('base64'),
-      created_at: snapshot.created_at
+      created_at: serializeCreatedAt(snapshot)
     })
   } catch (err) {
     next(err)
@@ -45,7 +49,7 @@ router.post('/:id/snapshot', authMiddleware, checkCanvasPermission('editor'), as
       created_by: req.user.id
     })
 
-    res.status(201).json({ id: snapshot.id, created_at: snapshot.created_at })
+    res.status(201).json({ id: snapshot.id, created_at: serializeCreatedAt(snapshot) })
   } catch (err) {
     next(err)
   }
@@ -57,14 +61,14 @@ router.get('/:id/snapshots', authMiddleware, checkCanvasPermission('viewer'), as
     const canvasId = req.params.id
     const snapshots = await YjsSnapshot.findAll({
       where: { canvas_id: canvasId },
-      attributes: ['id', 'created_at', 'created_by'],
+      attributes: ['id', 'createdAt', 'created_by'],
       include: [{ model: User, attributes: ['id', 'username'] }],
       order: [['created_at', 'DESC']]
     })
 
     const result = snapshots.map(s => ({
       id: s.id,
-      created_at: s.created_at,
+      created_at: serializeCreatedAt(s),
       created_by: s.User ? { id: s.User.id, username: s.User.username } : null
     }))
 
@@ -89,7 +93,7 @@ router.get('/:id/snapshots/:snapshotId', authMiddleware, checkCanvasPermission('
     res.json({
       id: snapshot.id,
       data: Buffer.from(snapshot.content).toString('base64'),
-      created_at: snapshot.created_at,
+      created_at: serializeCreatedAt(snapshot),
       created_by: snapshot.User ? { id: snapshot.User.id, username: snapshot.User.username } : snapshot.created_by
     })
   } catch (err) {

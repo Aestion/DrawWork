@@ -75,14 +75,14 @@ async function ensureLocalDir(filepath) {
 }
 
 async function storagePut(filename, buffer, mimetype) {
+  await ensureLocalDir(filename)
+  await promisify(fs.writeFile)(path.join(UPLOAD_DIR, filename), buffer)
   try {
     await minioClient.putObject(bucketName, filename, buffer, buffer.length, { 'Content-Type': mimetype })
-    return { ok: true, local: false }
   } catch (err) {
-    await ensureLocalDir(filename)
-    await promisify(fs.writeFile)(path.join(UPLOAD_DIR, filename), buffer)
-    return { ok: true, local: true }
+    console.warn('[Upload] MinIO unavailable, saved locally only:', err.message)
   }
+  return { ok: true }
 }
 
 async function storageGet(record) {

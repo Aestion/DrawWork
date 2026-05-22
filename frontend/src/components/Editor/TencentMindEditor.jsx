@@ -119,8 +119,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const applyingRemoteUpdateRef = useRef(false)
   const lastAppliedRemoteSnapshotRef = useRef('')
   const lastSavedSnapshotRef = useRef('')
-  const suppressRemoteDataChangeCountRef = useRef(0)
-  const suppressRemoteDataChangeUntilRef = useRef(0)
   const [contextMenu, setContextMenu] = useState(null)
   const contextNodeRef = useRef(null)
   const markerMenuRef = useRef(null)
@@ -563,35 +561,35 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       const onFirstRender = () => {
         mindMap.off('node_tree_render_end', onFirstRender)
 
-        injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
-        restoreNodeMedia(mindMap).catch(console.error)
+        applyingRemoteUpdateRef.current = true
+        try {
+          injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+          restoreNodeMedia(mindMap).catch(console.error)
 
-        try { restoreAssociativeLines(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore associative lines:', err) }
-        try { restoreGeneralizations(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore generalizations:', err) }
-        try { restoreBoundaries(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore boundaries:', err) }
-        try { restoreAllMarkers(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore markers:', err) }
-
-        mindMap.emit('data_change')
+          try { restoreAssociativeLines(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore associative lines:', err) }
+          try { restoreGeneralizations(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore generalizations:', err) }
+          try { restoreBoundaries(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore boundaries:', err) }
+          try { restoreAllMarkers(mindMap, originDataRef.current) } catch (err) { console.error('Failed to restore markers:', err) }
+          const currentData = buildDataTreeFromNodes()
+          if (currentData) {
+            originDataRef.current = simpleMindMapToTencent(currentData, originDataRef.current)
+            const snapshot = JSON.stringify(originDataRef.current)
+            lastAppliedRemoteSnapshotRef.current = snapshot
+            lastSavedSnapshotRef.current = snapshot
+          }
+        } finally {
+          setTimeout(() => {
+            applyingRemoteUpdateRef.current = false
+          }, 0)
+        }
       }
       mindMap.on('node_tree_render_end', onFirstRender)
 
-      // Listen for data changes to auto-save. Skip data_change events
-      // during the init setup period (restoreNodeMedia, restoreGeneralizations,
-      // restoreBoundaries, etc. all emit data_change). Using a time-based
-      // approach ensures we don't save stale data before Yjs sync propagates
-      // remote updates to other clients.
-      const initTime = Date.now()
+      // Listen for data changes to auto-save. Restoration and remote apply
+      // paths toggle applyingRemoteUpdateRef so real user edits can sync
+      // immediately after the editor opens.
       mindMap.on('data_change', () => {
-        // Skip events during the first 4 seconds after init (setup phase)
-        if (Date.now() - initTime < 4000) return
         if (applyingRemoteUpdateRef.current) return
-        if (suppressRemoteDataChangeCountRef.current > 0) {
-          if (Date.now() < suppressRemoteDataChangeUntilRef.current) {
-            suppressRemoteDataChangeCountRef.current -= 1
-            return
-          }
-          suppressRemoteDataChangeCountRef.current = 0
-        }
         clearTimeout(saveTimerRef.current)
         const snapshotCount = remoteUpdateCountRef.current
         saveTimerRef.current = setTimeout(() => {
@@ -634,10 +632,10 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     remoteUpdateCountRef.current++
     try {
       originDataRef.current = yjsTencentData
-      lastAppliedRemoteSnapshotRef.current = JSON.stringify(yjsTencentData)
+      const remoteSnapshot = JSON.stringify(yjsTencentData)
+      lastAppliedRemoteSnapshotRef.current = remoteSnapshot
+      lastSavedSnapshotRef.current = remoteSnapshot
       applyingRemoteUpdateRef.current = true
-      suppressRemoteDataChangeCountRef.current = 4
-      suppressRemoteDataChangeUntilRef.current = Date.now() + 1500
       clearTimeout(saveTimerRef.current)
       const smmData = tencentToSimpleMindMap(yjsTencentData)
       mmRef.current.setData(smmData)
@@ -650,7 +648,6 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         try { restoreAllMarkers(mmRef.current, yjsTencentData) } catch (e) { console.error('Remote restore markers:', e) }
         restoreNodeMedia(mmRef.current).catch(e => console.error('Remote restore media:', e))
         setTimeout(() => {
-          suppressRemoteDataChangeUntilRef.current = Date.now() + 1500
           applyingRemoteUpdateRef.current = false
         }, 0)
       })

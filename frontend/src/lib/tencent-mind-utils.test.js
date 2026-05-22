@@ -247,6 +247,29 @@ describe('tencent-mind-utils', () => {
       expect(child.markers[0].markerId).toBe('symbol-question')
     })
 
+    it('should preserve marker metadata when marker icons are unchanged', () => {
+      const smmData = {
+        data: { text: 'Root', _tencentMeta: { id: 'root' } },
+        children: [{
+          data: {
+            text: 'Child',
+            icon: ['tencent_question'],
+            _tencentMeta: {
+              id: 'child1',
+              markers: [{ markerId: 'symbol-question', id: 'existing-marker', color: '#f88825' }]
+            }
+          },
+          children: []
+        }]
+      }
+
+      const result = simpleMindMapToTencent(smmData, null)
+
+      expect(result.rootTopic.children.attached[0].markers).toEqual([
+        { markerId: 'symbol-question', id: 'existing-marker', color: '#f88825' }
+      ])
+    })
+
     it('should remove stale marker metadata when all icons are removed', () => {
       const smmData = {
         data: { text: 'Root', _tencentMeta: { id: 'root' } },
@@ -311,6 +334,33 @@ describe('tencent-mind-utils', () => {
       const result = simpleMindMapToTencent(smmData, null)
 
       expect(result.rootTopic.children.attached[0].extensions?.['drawwork.generalization']).toBeUndefined()
+    })
+
+    it('should save edited text instead of stale rich text metadata', () => {
+      const smmData = {
+        data: {
+          text: 'Edited Root',
+          _tencentMeta: {
+            id: 'root',
+            richText: [{ text: 'Old Root', color: '#1f1f1f' }]
+          }
+        },
+        children: [{
+          data: {
+            text: 'Edited Child',
+            _tencentMeta: {
+              id: 'child1',
+              richText: [{ text: 'Old Child', color: '#1f1f1f' }]
+            }
+          },
+          children: []
+        }]
+      }
+
+      const result = simpleMindMapToTencent(smmData, null)
+
+      expect(result.rootTopic.title.children[0].children[0].text).toBe('Edited Root')
+      expect(result.rootTopic.children.attached[0].title.children[0].children[0].text).toBe('Edited Child')
     })
   })
 

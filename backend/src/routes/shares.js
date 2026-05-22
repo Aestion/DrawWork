@@ -5,6 +5,8 @@ const { ShareToken, Board, BoardShare, User, sequelize } = require('../models')
 const { verifyToken } = require('../utils/jwt')
 const { createNotification, NOTIFICATION_TYPES } = require('../utils/notificationService')
 
+const MAX_USES_ERROR = '分享链接使用次数已达上限'
+
 function hashShareToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex')
 }
@@ -21,7 +23,7 @@ function extractUserIdFromHeader(req) {
   }
 }
 
-// GET /api/shares/validate?token=xxx — 验证分享链接
+// GET /api/shares/validate?token=xxx - 验证分享链接，并为登录用户授予访问权
 router.get('/validate', async (req, res, next) => {
   try {
     const { token } = req.query
@@ -51,59 +53,54 @@ router.get('/validate', async (req, res, next) => {
       return res.status(400).json({ error: '分享链接已过期' })
     }
 
-    const shouldConsume = req.query.consume === 'true'
     const userId = extractUserIdFromHeader(req)
 
-    // If user already has access, do not count as a new use
     let alreadyHasAccess = false
     if (userId) {
       const existing = await BoardShare.findOne({
         where: { board_id: shareToken.board_id, user_id: userId }
       })
-      if (existing) {
-        alreadyHasAccess = true
-      }
+      alreadyHasAccess = Boolean(existing)
     }
 
-    if (shouldConsume && !alreadyHasAccess) {
-      // Atomic check-and-increment inside a transaction to prevent races
+    // A link use is consumed only when it grants a logged-in user access.
+    // Anonymous previews and refreshes by existing collaborators do not burn max_uses.
+    if (userId && !alreadyHasAccess) {
+      const userExists = await User.findByPk(userId)
+      if (!userExists) {
+        return res.status(401).json({ error: '用户不存在或会话已过期，请重新登录' })
+      }
+
       try {
         await sequelize.transaction(async (t) => {
           const fresh = await ShareToken.findByPk(shareToken.id, {
             transaction: t,
             lock: t.LOCK.UPDATE
           })
+
           if (fresh.max_uses && fresh.used_count >= fresh.max_uses) {
-            throw new Error('分享链接使用次数已达上限')
+            throw new Error(MAX_USES_ERROR)
           }
+
+          await BoardShare.create({
+            board_id: shareToken.board_id,
+            user_id: userId,
+            permission: shareToken.permission,
+            invited_by: shareToken.created_by,
+            source: 'token',
+            share_token_id: shareToken.id
+          }, { transaction: t })
+
           await fresh.increment('used_count', { transaction: t })
         })
         await shareToken.reload()
       } catch (err) {
-        if (err.message === '分享链接使用次数已达上限') {
-          return res.status(400).json({ error: err.message })
+        if (err.message === MAX_USES_ERROR) {
+          return res.status(400).json({ error: MAX_USES_ERROR })
         }
         throw err
       }
-    }
 
-    // Grant access via share link if user is logged in and doesn't already have it
-    if (userId && !alreadyHasAccess) {
-      // Verify user exists in database before creating BoardShare
-      const userExists = await User.findByPk(userId)
-      if (!userExists) {
-        return res.status(401).json({ error: '用户不存在或会话已过期，请重新登录' })
-      }
-      await BoardShare.create({
-        board_id: shareToken.board_id,
-        user_id: userId,
-        permission: shareToken.permission,
-        invited_by: shareToken.created_by,
-        source: 'token',
-        share_token_id: shareToken.id
-      })
-
-      // Notify the board owner that a new user joined via share link
       const board = await Board.findByPk(shareToken.board_id, { attributes: ['id', 'name', 'owner_id'] })
       if (board && board.owner_id !== userId) {
         const joinUser = await User.findByPk(userId, { attributes: ['username'] })

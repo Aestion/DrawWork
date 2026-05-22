@@ -268,10 +268,8 @@ export function useYjs(roomId, token, options = {}) {
             _flush: Date.now(),
             _unloading: true
           })
-          // Direct WebSocket send of newline to try to flush buffer
-          if (conn.provider.ws?.readyState === WebSocket.OPEN) {
-            conn.provider.ws.send('')
-          }
+          // Removed: empty ws.send('') causes lib0 "Unexpected end of array"
+          // on the server when it tries to decode an empty binary message.
         } catch (e) { /* ignore */ }
       }
     }

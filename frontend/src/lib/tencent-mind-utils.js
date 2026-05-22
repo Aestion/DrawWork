@@ -59,6 +59,13 @@ function cleanRichTextArtifact(text) {
   return result.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]*>/g, '').trim()
 }
 
+function plainSimpleText(text) {
+  return cleanRichTextArtifact(text || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .trim()
+}
+
 /**
  * Recursively convert Tencent rootTopic node to simple-mind-map node.
  */
@@ -234,9 +241,12 @@ function makeRichTitle(segments) {
  * Rebuild a Tencent Docs node from saved metadata + current text.
  */
 function rebuildNode(text, meta, children) {
+  const plainText = plainSimpleText(text)
+  const richTextPlain = meta?.richText?.map(s => s.text || '').join('')
+  const useStoredRichText = meta?.richText && plainText === richTextPlain
   const node = {
     id: meta?.id || `node_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    title: meta?.richText ? makeRichTitle(meta.richText) : makeTitle(text, meta?.color),
+    title: useStoredRichText ? makeRichTitle(meta.richText) : makeTitle(plainText, meta?.color),
     children: { attached: children || [], detached: [] }
   }
   if (meta?.markers) node.markers = meta.markers
@@ -265,6 +275,7 @@ function cloneTencentMeta(meta) {
 function convertBack(smmNode, origMeta) {
   let text = smmNode.data?.text || ''
   const meta = cloneTencentMeta(smmNode.data?._tencentMeta || origMeta)
+  const existingMarkers = meta.markers ? [...meta.markers] : []
   delete meta.markers
   if (meta.extensions) {
     delete meta.extensions['drawwork.generalization']
@@ -329,11 +340,13 @@ function convertBack(smmNode, origMeta) {
   if (iconData && iconData.length > 0) {
     const markers = iconData.map(iconKey => {
       const markerId = iconKeyToMarkerId(iconKey)
-      return markerId ? {
+      if (!markerId) return null
+      const existingMarker = existingMarkers.find(marker => marker.markerId === markerId)
+      return existingMarker || {
         markerId,
         id: `marker_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         color: '#e74c3c'
-      } : null
+      }
     }).filter(Boolean)
     if (markers.length > 0) {
       node.markers = markers
