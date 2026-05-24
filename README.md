@@ -3,6 +3,7 @@
   <img src="https://img.shields.io/badge/Express-4.x-000000?logo=express" alt="Express 4.x" />
   <img src="https://img.shields.io/badge/Yjs-13.x-FF6600" alt="Yjs 13.x" />
   <img src="https://img.shields.io/badge/Sequelize-6.x-52B0E7" alt="Sequelize 6.x" />
+  <img src="https://img.shields.io/badge/Vite-5-646CFF?logo=vite" alt="Vite 5" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License MIT" />
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs Welcome" />
 </p>
@@ -12,8 +13,12 @@
 
 <p align="center">
   A real-time collaborative whiteboard platform built with <strong>React + Excalidraw + Yjs</strong>.
-  Supports freehand drawing, rich media, structured tools (mind maps, kanban, swimlane diagrams),
+  Supports freehand drawing, rich media, multiple mind map engines, structured diagram tools,
   and real-time multi-user collaboration.
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
 ---
@@ -30,15 +35,17 @@
 ### 🧠 Structured Tools
 | Tool | Powered By | Highlights |
 |------|-----------|------------|
-| **Mind Map** | React Flow | Multi-root nodes (up to 10), cross-tree connections, collapsible branches, Markdown import/export, auto-layout, search, undo/redo |
+| **Excalidraw** | @excalidraw/excalidraw | Freehand drawing, shapes, rich media, hand-drawn style |
+| **Mind Map** | React Flow / MindElixir / SimpleMindMap / JsMind / Markmap / Tencent | Multi-root nodes, cross-tree connections, collapsible branches, Markdown import/export, auto-layout, search, undo/redo |
+| **Tencent Mind Map** | Tencent Mind Map Engine | Context menu, marker system (10 types), collaboration cursors, Yjs sync |
 | **Kanban** | Custom React | Columns + cards with drag-and-drop, column reordering, 3-second undo on delete |
 | **Swimlane** | Custom React | Horizontal/vertical lanes, element drag-and-drop, arrow connections |
 
 ### 👥 Real-Time Collaboration
-- **Yjs CRDT** for conflict-free real-time sync
-- Multi-cursor display with user names
-- Online user list with connection status
+- **Yjs CRDT** for conflict-free real-time sync across all tool types
+- Multi-cursor display with user names and online user list
 - Per-canvas Yjs rooms (independent collaboration)
+- HTTP fallback sync for WebSocket disconnections
 
 ### 💬 Communication
 - **Comments**: positionable anchors on canvas, threaded replies, @mentions
@@ -59,16 +66,17 @@
 | Layer | Technology |
 |-------|-----------|
 | **Frontend** | React 18, Vite 5, Tailwind CSS, Zustand |
-| **Drawing** | @excalidraw/excalidraw 0.17.6 |
-| **Diagrams** | @xyflow/react (React Flow) 12.x |
+| **Drawing** | @excalidraw/excalidraw 0.17.x |
+| **Mind Maps** | @xyflow/react 12.x, MindElixir 5.x, SimpleMindMap, Tencent Mind Engine |
 | **Backend** | Node.js 20, Express 4.x |
 | **ORM** | Sequelize 6.x (SQLite / PostgreSQL) |
 | **Collaboration** | Yjs 13.x, y-websocket 2.x |
 | **Database** | SQLite (dev) / PostgreSQL 15 (prod) |
 | **Cache** | Redis 7 (optional, multi-instance Yjs) |
-| **File Storage** | Minio / local filesystem |
+| **File Storage** | MinIO / local filesystem |
 | **Reverse Proxy** | Nginx (Alpine) |
 | **Container** | Docker + Docker Compose |
+| **Testing** | Vitest, Jest, Playwright, PyAutoGUI |
 
 ---
 
@@ -78,26 +86,31 @@
 drawwork/
 ├── frontend/                  # React + Vite SPA
 │   ├── src/
-│   │   ├── components/       # UI components (Dashboard, Editor, Notifications, UI)
+│   │   ├── components/
 │   │   │   ├── Dashboard/    # BoardCard, BoardModal
-│   │   │   ├── Editor/       # ExcalidrawWrapper, MindMapEditor, KanbanEditor, SwimlaneEditor
-│   │   │   │                # CommentsOverlay, SharePanel, VersionHistory, VotePanel
+│   │   │   ├── Editor/       # ExcalidrawWrapper, TencentMindEditor, MindMapEditor,
+│   │   │   │                # KanbanEditor, SwimlaneEditor, MindElixirEditor,
+│   │   │   │                # SimpleMindMapEditor, CommentsOverlay, SharePanel,
+│   │   │   │                # VersionHistory, VotePanel, CanvasSidebar
 │   │   │   ├── Notifications/# NotificationBell, NotificationCenter
 │   │   │   └── ui/          # Toast, SyncIndicator, Skeleton, LoadingButton
-│   │   ├── hooks/           # useYjs, useComments, useVotes, useKanbanYjs, etc.
-│   │   ├── lib/             # axios, constants, imageUtils, kanban, swimlane
+│   │   ├── hooks/           # useYjs, useTencentMindYjs, useMindMapYjs,
+│   │   │                   # useKanbanYjs, useSwimlaneYjs, useComments, useVotes
+│   │   ├── lib/             # axios, constants, imageUtils, tencent-mind-utils,
+│   │   │                   # marker-icons, kanban, swimlane, unbalanced-layout-plugin
 │   │   ├── pages/           # AuthPage, DashboardPage, EditorPage, ShareRedirectPage
 │   │   ├── stores/          # authStore, boardStore, canvasStore (Zustand)
 │   │   ├── App.jsx          # Router config
 │   │   └── main.jsx         # Entry point
 │   └── package.json
-├── backend/                   # Node.js + Express API
+├── backend/                   # Node.js + Express REST API
 │   ├── src/
 │   │   ├── config/          # database.js, minio.js, redis.js
 │   │   ├── middleware/      # auth.js (JWT), permission.js (4-tier)
-│   │   ├── models/          # 15 Sequelize models (User, Board, Canvas, etc.)
-│   │   ├── routes/          # 43 API endpoints across 10 route files
+│   │   ├── models/          # 19 Sequelize models (User, Board, Canvas, TencentMind, etc.)
+│   │   ├── routes/          # 10 route modules (auth, boards, canvases, comments, votes, etc.)
 │   │   ├── utils/           # jwt.js, db.js, notificationService.js
+│   │   ├── __tests__/       # 14 test files (Jest + Supertest)
 │   │   └── app.js           # Express entry point
 │   ├── Dockerfile
 │   └── package.json
@@ -108,14 +121,26 @@ drawwork/
 ├── config/                    # Infrastructure config
 │   ├── docker-compose.yml   # 6 services: nginx, api, yjs, postgres, redis, minio
 │   ├── nginx.conf           # Reverse proxy config
-│   ├── init.sql             # Database schema (18 tables)
+│   ├── init.sql             # Database schema (18+ tables)
+│   ├── Dockerfile           # Nginx build
 │   └── .env.example         # Environment variable template
 ├── scripts/                  # Operations scripts
 │   ├── deploy.sh            # One-command deployment
 │   ├── backup.sh            # Database + file backup
 │   ├── update.sh            # Git pull + rebuild + restart
+│   ├── init-user.js         # User initialization
 │   └── start-dev.ps1        # Local dev launcher (PowerShell)
-└── docs/                     # Documentation
+├── test/                     # Multi-level testing
+│   ├── level1-playwright/   # Playwright E2E tests
+│   ├── level2-pyautogui/    # PyAutoGUI GUI automation tests
+│   ├── mixed/               # Mixed integration tests
+│   └── TEST-CATALOG.md      # Test catalog index
+├── docs/                     # Documentation
+│   ├── Cwork_docs/          # Chinese development documentation
+│   └── superpowers/         # Design specs and implementation plans
+├── Makefile                  # Docker deployment commands
+├── start-dev.sh              # Dev environment launcher (Bash)
+└── stop-dev.sh               # Dev environment stopper
 ```
 
 ---
@@ -138,9 +163,10 @@ cd backend && npm install && cd ..
 cd frontend && npm install && cd ..
 cd yjs-server && npm install && cd ..
 
-# 3. Start everything (or use the dev script)
-# Option A: One-click launch (PowerShell)
-./scripts/start-dev.ps1
+# 3. Start everything
+# Option A: One-click launch (Bash / PowerShell)
+./start-dev.sh          # Linux/macOS/Git Bash
+.\scripts\start-dev.ps1 # Windows PowerShell
 
 # Option B: Manual start (3 terminals)
 # Terminal 1 - Backend API
@@ -169,14 +195,17 @@ After first startup (or database seed), use:
 
 ```bash
 # Build and start all services
+make up
+
+# Or using docker-compose directly
 cd config
-docker-compose up -d --build
+docker compose up -d --build
 
 # Check status
-docker-compose ps
+make status
 
 # View logs
-docker-compose logs -f
+make logs
 
 # Access
 open http://localhost
@@ -192,12 +221,27 @@ open http://localhost
 | `postgres` | 5432 | PostgreSQL database |
 | `redis` | 6379 | Cache & pub/sub |
 | `minio` | 9000/9001 | File storage / Console |
+| `adminer` | 8080 | Database admin tool (profile: admin) |
+
+### Makefile Commands
+
+| Command | Description |
+|---------|-------------|
+| `make up` | Start all services |
+| `make down` | Stop all services |
+| `make build` | Build all Docker images |
+| `make rebuild` | No-cache rebuild |
+| `make logs` | View all service logs |
+| `make status` | Container status |
+| `make admin` | Start Adminer (DB admin tool) |
+| `make backup` | Execute database backup |
+| `make check` | System health check |
 
 ---
 
 ## 📋 API Overview
 
-The REST API exposes **43 endpoints** across the following modules:
+The REST API exposes endpoints across the following modules:
 
 | Module | Endpoints | Auth |
 |--------|-----------|------|
@@ -207,37 +251,57 @@ The REST API exposes **43 endpoints** across the following modules:
 | Comments | `GET/POST /api/canvases/:id/comments` + replies/resolve | JWT + Permission |
 | Votes | `POST /api/canvases/:id/votes` + records/close/results | JWT + Permission |
 | Snapshots | `GET/POST /api/canvases/:id/snapshot[s]` | JWT + Permission |
-| Structured Tools | `GET/PUT /api/canvases/:id/{mindmap,kanban,swimlane}` | JWT + Permission |
+| Structured Tools | `GET/PUT /api/canvases/:id/{mindmap,kanban,swimlane,tencentMind}` | JWT + Permission |
 | Sharing | `POST/DELETE /api/boards/:id/{shares,tokens}` + `GET /api/shares/validate` | JWT + Permission |
 | Notifications | `GET/PUT /api/notifications` | JWT |
 | Upload | `POST /api/upload` + `GET /api/upload/:id` | JWT + Permission |
 | Admin | `GET/PUT /api/admin/users` + `POST /api/admin/backup` | Admin |
 | Health | `GET /health` | Public |
 
-See [03_技术架构.md](docs/../../DrawWork_开发文档包/03_技术架构.md) for the full API table.
+See [03_技术架构.md](DrawWork_开发文档包/03_技术架构.md) for the full API table.
 
 ---
 
 ## 🧪 Testing
 
-### Backend
+### Backend (Jest + Supertest)
 ```bash
 cd backend
 npm test
 ```
-> Uses Jest + Supertest + SQLite in-memory. Tests cover auth, boards, canvas, comments, shares, snapshots, votes, notifications, uploads, websocket, structured tools, and admin.
+14 test files covering: auth, boards, canvas, comments, shares, share validation, snapshots, votes, notifications, uploads, websocket, structured tools, and admin.
 
-### Frontend
+### Frontend Unit Tests (Vitest)
 ```bash
 cd frontend
 npm run test:unit    # Vitest unit tests
-npm run test:e2e     # Playwright E2E tests (requires dev servers running)
 ```
+Tests for stores (authStore, boardStore, canvasStore), hooks (useYjs, useTencentMindYjs, useKanbanYjs, useSwimlaneYjs, useMindMapYjs), utilities (tencent-mind-utils, kanban, swimlane), and components (ExcalidrawWrapper, TencentMindEditor, MindMapEditor).
 
-### Test Coverage
-- **14 backend test files** covering all API modules
-- **Frontend tests** for stores, hooks, utilities, and key components (ExcalidrawWrapper, MindMapEditor, ErrorBoundary)
-- **Playwright E2E** configuration for browser-based testing
+### Playwright E2E (Browser-based)
+```bash
+cd frontend
+npm run test:e2e     # Requires dev servers running
+```
+Test specs in `test/level1-playwright/specs/`:
+- **Mind Map**: collaboration, switch, features, basic operations
+- **Tencent Mind**: collaboration, basic operations
+- **Canvas**: polling, structured canvas collaboration
+- **Core**: auth, dashboard, editor, collaboration, real-time sync
+- **Media**: media upload, drag-and-drop, media types
+- **Other**: security, shares, share-links, keyboard shortcuts, laser pointer, mouse interactions, persistence, tool sync, workflow, yjs-diag
+
+### PyAutoGUI (GUI Automation)
+```
+test/level2-pyautogui/excalidraw/
+```
+Tests for: drag-and-drop, drawing, manipulation, shortcuts, text, tools, undo/redo.
+
+### Mixed Integration Tests
+```
+test/mixed/
+```
+Tests for: collaboration, offline reconnection, share permissions.
 
 ---
 
@@ -265,6 +329,8 @@ User B ←→ Yjs Doc ←→ y-websocket ↕            Auto-save every 10s
                                  ↕
                          Redis pub/sub (for multi-instance)
 ```
+
+Each structured tool (Excalidraw, Mind Map, Tencent Mind, Kanban, Swimlane) has its own Yjs document type with independent real-time sync.
 
 ### Permission Levels
 ```
