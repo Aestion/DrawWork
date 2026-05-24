@@ -24,7 +24,14 @@ module.exports = (sequelize, DataTypes) => {
   }, {
     tableName: 'vote_records',
     timestamps: true,
-    underscored: true
+    underscored: true,
+    validate: {
+      eitherUserOrSession() {
+        if (!this.user_id && !this.session_id) {
+          throw new Error('VoteRecord must have user_id or session_id')
+        }
+      }
+    }
   })
 
   return VoteRecord

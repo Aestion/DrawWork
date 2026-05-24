@@ -48,10 +48,20 @@ describe('Votes API', () => {
       expect(res.body.votes_per_user).toBe(2)
       expect(res.body.is_closed).toBe(false)
     })
+
+    it('should cap votes_per_user at 100', async () => {
+      const res = await request(app)
+        .post(`/api/canvases/${testCanvas.id}/votes`)
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ title: 'Too many votes', votes_per_user: 999 })
+
+      expect(res.status).toBe(201)
+      expect(res.body.votes_per_user).toBe(100)
+    })
   })
 
   describe('GET /api/canvases/:id/votes', () => {
-    it('should return votes list', async () => {
+    it('should return votes list with my_vote_count', async () => {
       const res = await request(app)
         .get(`/api/canvases/${testCanvas.id}/votes`)
         .set('Authorization', `Bearer ${authToken}`)
@@ -59,6 +69,11 @@ describe('Votes API', () => {
       expect(res.status).toBe(200)
       expect(Array.isArray(res.body)).toBe(true)
       expect(res.body.length).toBeGreaterThanOrEqual(1)
+      // 每个投票都应包含 my_vote_count 字段
+      res.body.forEach(v => {
+        expect(v).toHaveProperty('my_vote_count')
+        expect(typeof v.my_vote_count).toBe('number')
+      })
     })
   })
 
@@ -92,6 +107,25 @@ describe('Votes API', () => {
         .send({})
 
       expect(res.status).toBe(400)
+    })
+
+    it('should reject invalid target_id not in vote options', async () => {
+      const voteRes = await request(app)
+        .post(`/api/canvases/${testCanvas.id}/votes`)
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({
+          title: 'Options test',
+          scope_data: { options: ['Apple', 'Banana', 'Cherry'] }
+        })
+      const voteId = voteRes.body.id
+
+      const res = await request(app)
+        .post(`/api/votes/${voteId}/records`)
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ target_id: 'Dragonfruit' })
+
+      expect(res.status).toBe(400)
+      expect(res.body.error).toBe('无效的投票选项')
     })
   })
 
@@ -136,6 +170,22 @@ describe('Votes API', () => {
 
       expect(res.status).toBe(200)
       expect(Array.isArray(res.body)).toBe(true)
+    })
+  })
+
+  describe('VoteRecord model validation', () => {
+    it('should reject creation without user_id or session_id', async () => {
+      // 创建一个投票用于 VoteRecord
+      const voteRes = await request(app)
+        .post(`/api/canvases/${testCanvas.id}/votes`)
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ title: 'Model validation test' })
+
+      // 直接通过模型创建，绕开 API 层的 user_id/session_id 设置
+      const { VoteRecord } = require('../models')
+      await expect(
+        VoteRecord.create({ vote_id: voteRes.body.id, target_id: 'X' })
+      ).rejects.toThrow()
     })
   })
 })

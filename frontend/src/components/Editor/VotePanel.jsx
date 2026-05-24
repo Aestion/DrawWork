@@ -1,10 +1,10 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useVotes } from '../../hooks/useVotes'
+import { toast } from '../ui/Toast'
 
 export default function VotePanel({ canvasId, canEdit, onClose }) {
-  const { votes, loading, createVote, submitVote, closeVote, fetchResults } = useVotes(canvasId)
+  const { votes, loading, createVote, submitVote, closeVote, fetchResults } = useVotes(canvasId, { refetchInterval: 5000 })
   const [resultsMap, setResultsMap] = useState({})
-  const [votedMap, setVotedMap] = useState({})
   const [submitting, setSubmitting] = useState({})
   const [showCreate, setShowCreate] = useState(false)
   const [createTitle, setCreateTitle] = useState('')
@@ -15,14 +15,12 @@ export default function VotePanel({ canvasId, canEdit, onClose }) {
   const [creating, setCreating] = useState(false)
   const panelRef = useRef(null)
 
-  // Load results for closed/expired votes on mount
+  // 加载所有投票的结果（包括活跃投票，防止面板关闭重开后数据丢失）
   useEffect(() => {
     votes.forEach(v => {
-      if (v.is_closed || (v.expires_at && new Date(v.expires_at) < new Date())) {
-        fetchResults(v.id).then(r => {
-          if (r.length) setResultsMap(prev => ({ ...prev, [v.id]: r }))
-        })
-      }
+      fetchResults(v.id).then(r => {
+        if (r.length) setResultsMap(prev => ({ ...prev, [v.id]: r }))
+      })
     })
   }, [votes, fetchResults])
 
@@ -32,12 +30,11 @@ export default function VotePanel({ canvasId, canEdit, onClose }) {
     if (submitting[voteId]) return
     setSubmitting(prev => ({ ...prev, [voteId]: true }))
     const result = await submitVote(voteId, targetId)
-    const results = await fetchResults(voteId)
-    if (results.length) {
-      setResultsMap(prev => ({ ...prev, [voteId]: results }))
-    }
     if (result.ok) {
-      setVotedMap(prev => ({ ...prev, [voteId]: (prev[voteId] || 0) + 1 }))
+      const results = await fetchResults(voteId)
+      if (results.length) {
+        setResultsMap(prev => ({ ...prev, [voteId]: results }))
+      }
       setVoteError('')
     } else {
       setVoteError(result.error || '投票提交失败')
@@ -104,8 +101,9 @@ export default function VotePanel({ canvasId, canEdit, onClose }) {
           const resultMap = {}
           results.forEach(r => { resultMap[r.target_id] = r.count })
           const totalVotes = results.reduce((sum, r) => sum + r.count, 0)
-          const hasVoted = votedMap[v.id] > 0 || results.some(r => r.count > 0 && results.length > 0)
-          const remaining = (v.votes_per_user || 1) - (votedMap[v.id] || 0)
+          const myVoteCount = v.my_vote_count || 0
+          const hasVoted = myVoteCount > 0
+          const remaining = (v.votes_per_user || 1) - myVoteCount
           const closed = v.is_closed || isExpired(v)
 
           return (
@@ -130,7 +128,7 @@ export default function VotePanel({ canvasId, canEdit, onClose }) {
                 {canEdit && !closed && (
                   <button
                     className="text-xs text-gray-400 hover:text-red-500 ml-2 shrink-0"
-                    onClick={() => { closeVote(v.id); toast.success('投票已关闭') }}
+                    onClick={async () => { const r = await closeVote(v.id); if (r.ok) toast.success('投票已关闭') }}
                     title="关闭投票"
                   >
                     关闭

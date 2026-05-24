@@ -54,6 +54,12 @@ router.post('/:id/records', authMiddleware, resolveVotePermission('viewer'), asy
       return res.status(400).json({ error: '缺少投票目标' })
     }
 
+    // 校验 target_id 是否是有效选项
+    const validOptions = vote.scope_data?.options || []
+    if (validOptions.length > 0 && !validOptions.includes(target_id)) {
+      return res.status(400).json({ error: '无效的投票选项' })
+    }
+
     const anonymousSessionId = vote.is_anonymous
       ? crypto.createHash('sha256').update(`${vote.id}:${req.user.id}:${getJwtSecret()}`).digest('hex')
       : null

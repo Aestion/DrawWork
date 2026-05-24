@@ -1,7 +1,9 @@
 const router = require('express').Router()
 const { authMiddleware } = require('../middleware/auth')
 const { checkCanvasPermission } = require('../middleware/permission')
-const { Canvas, MindMap, KanbanBoard, Swimlane, TencentMind, Comment, CommentReply, User, Vote } = require('../models')
+const { Canvas, MindMap, KanbanBoard, Swimlane, TencentMind, Comment, CommentReply, User, Vote, VoteRecord } = require('../models')
+const crypto = require('crypto')
+const { getJwtSecret } = require('../utils/jwt')
 
 function checkOptimisticLock(record, clientUpdatedAt) {
   if (!clientUpdatedAt) return
@@ -135,7 +137,7 @@ router.post('/:id/comments', authMiddleware, checkCanvasPermission('commenter'),
 
 // === 画布投票子路由 ===
 
-// GET /api/canvases/:id/votes — 获取画布投票列表
+// GET /api/canvases/:id/votes — 获取画布投票列表（含当前用户投票数）
 router.get('/:id/votes', authMiddleware, checkCanvasPermission('viewer'), async (req, res, next) => {
   try {
     const canvasId = req.params.id
@@ -143,7 +145,20 @@ router.get('/:id/votes', authMiddleware, checkCanvasPermission('viewer'), async 
       where: { canvas_id: canvasId },
       order: [['created_at', 'DESC']]
     })
-    res.json(votes)
+
+    // 为每个投票计算当前用户的已投票数
+    const enriched = await Promise.all(votes.map(async (vote) => {
+      let myVoteCount
+      if (vote.is_anonymous) {
+        const sessionId = crypto.createHash('sha256').update(`${vote.id}:${req.user.id}:${getJwtSecret()}`).digest('hex')
+        myVoteCount = await VoteRecord.count({ where: { vote_id: vote.id, session_id: sessionId } })
+      } else {
+        myVoteCount = await VoteRecord.count({ where: { vote_id: vote.id, user_id: req.user.id } })
+      }
+      return { ...vote.toJSON(), my_vote_count: myVoteCount }
+    }))
+
+    res.json(enriched)
   } catch (err) {
     next(err)
   }
@@ -159,11 +174,13 @@ router.post('/:id/votes', authMiddleware, checkCanvasPermission('editor'), async
       return res.status(400).json({ error: '投票主题不能为空' })
     }
 
+    const maxVotes = Math.min(Math.max(votes_per_user ?? 1, 1), 100)
+
     const vote = await Vote.create({
       canvas_id: canvasId,
       created_by: req.user.id,
       title: title.trim(),
-      votes_per_user: votes_per_user ?? 1,
+      votes_per_user: maxVotes,
       is_anonymous: is_anonymous ?? false,
       scope: scope || 'canvas',
       scope_data: scope_data || null,
