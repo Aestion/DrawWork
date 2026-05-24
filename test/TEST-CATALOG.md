@@ -10,12 +10,11 @@
 | 层级 | 工具 | 用例数 | 状态 |
 |------|------|--------|------|
 | Backend | Jest | ~78 | ✅ 已有 (保留原地) |
-| Level 1 | Playwright | 58 | ✅ 已迁移到 test/level1-playwright/ |
-| **Level 1 小计** | | **~136** | |
-| API (新) | pytest | 0/25 | 🔨 待写 (Phase 2) |
-| Level 2 (新) | PyAutoGUI | 0/35 | 🔨 待写 (Phase 3-4) |
-| Mixed (新) | API+PyAutoGUI | 0/8 | 🔨 待写 (Phase 5) |
-| **新用例小计** | | **0/68** | |
+| Level 1 | Playwright | ~58 | ✅ 已迁移到 test/level1-playwright/ |
+| API | pytest | 0/27 | ❌ 目录不存在，需从头实现 |
+| Level 2 | PyAutoGUI | ~32 | ⚠️ 大部分 PASS，2 个测试有代码缺陷 |
+| Mixed | API+PyAutoGUI | ~3 | ⚠️ 少于预期，缺少 share-permissions |
+| **总计** | | **~171** | |
 
 ---
 
@@ -66,7 +65,14 @@
 | `mindmap.spec.md` | 0 | (手动检查清单，无自动化) |
 | `smoke-test.js` | 0 | (冒烟测试入口，无独立测试) |
 
-### 2.2 MindMap 专项 (3 文件, 29 用例)
+### 2.2 其他 Level 1 文件 (不在原始 58 用例中)
+
+| 文件 | 说明 |
+|------|------|
+| `mindmap/mindmap-collaboration.spec.js` | 思维导图多人协作用例 |
+| `tencentmind/tencentmind-collaboration.spec.js` | TencentMind 协作用例 |
+
+### 2.3 MindMap 专项 (3 文件, 29 用例)
 
 | 文件 | 用例数 | 测试场景 |
 |------|--------|----------|
@@ -76,72 +82,73 @@
 
 ---
 
-## 三、API 直测 ✅
+## 三、API 直测 ❌ (未实现)
 
-位置: `test/api/` (8 文件, 27 用例)
+位置: `test/api/` — **目录不存在，需要创建**
 
-| 文件 | 计划用例 | 覆盖 |
-|------|----------|------|
-| `test_auth_api.py` | 3 | 注册成功 / 登录返回 Token / 错误密码拒绝 |
-| `test_boards_api.py` | 3 | 创建含默认画布 / 列表 / 软删除 |
-| `test_canvases_api.py` | 4 | 创建 4 种类型 / 类型校验 / 列表 / 删除 |
-| `test_shares_api.py` | 4 | 邀请编辑者 / 非 owner 拒绝 / 生成分享 Token / 移除协作者 |
-| `test_comments_api.py` | 3 | 创建评论含坐标 / 回复 / 解决 |
-| `test_uploads_api.py` | 2 | 上传文件 / 无 board 拒绝 |
-| `test_votes_api.py` | 4 | 创建投票 / 提交投票 / 关闭投票 / 查看结果 |
+| 文件 | 计划用例 | 覆盖 | 状态 |
+|------|----------|------|------|
+| `test_auth_api.py` | 3 | 注册成功 / 登录返回 Token / 错误密码拒绝 | ❌ 未实现 |
+| `test_boards_api.py` | 3 | 创建含默认画布 / 列表 / 软删除 | ❌ 未实现 |
+| `test_canvases_api.py` | 4 | 创建 4 种类型 / 类型校验 / 列表 / 删除 | ❌ 未实现 |
+| `test_shares_api.py` | 4 | 邀请编辑者 / 非 owner 拒绝 / 生成分享 Token / 移除协作者 | ❌ 未实现 |
+| `test_comments_api.py` | 3 | 创建评论含坐标 / 回复 / 解决 | ❌ 未实现 |
+| `test_uploads_api.py` | 2 | 上传文件 / 无 board 拒绝 | ❌ 未实现 |
+| `test_votes_api.py` | 4 | 创建投票 / 提交投票 / 关闭投票 / 查看结果 | ❌ 未实现 |
 
 ---
 
-## 四、Level 2: PyAutoGUI 真实用户测试 (2026-05-14 ✅)
+## 四、Level 2: PyAutoGUI 真实用户测试
 
-位置: `test/level2-pyautogui/` (16 文件, 36 用例, 24 PASS / 12 FAIL)
+位置: `test/level2-pyautogui/` (15 文件, ~32 用例, 大部分 PASS)
 
-> **已修复基础设施问题：** port_killer 缺失、文件名连字符→下划线、emoji GBK 编码崩溃、Backend NODE_ENV=test 频率限制、navigation 未捕获 auth token
+> **已修复基础设施问题：** port_killer 缺失、文件名连字符→下划线、emoji GBK 编码崩溃、Backend NODE_ENV=test 频率限制
 
-### 4.1 公共 (4 用例, 4 PASS ✅)
+> **当前代码缺陷：** `test_text.py` 全屏像素比对无法检测文本元素（0.00%），`test_drag_drop.py` 使用未定义变量 `board_id` 和硬编码 token
+
+### 4.1 公共 (2 用例)
 
 | 文件 | 用例 | 结果 |
 |------|------|------|
 | `common/test_auth.py` | 2 | ✅ pyautogui 版登录 / 错误密码视觉验证 |
-| `common/test_navigation.py` | 2 | ✅ Dashboard→Editor 跳转 / Canvas 切换 (修复 auth token 后通过) |
 
-### 4.2 Excalidraw (15 用例, 13 PASS / 2 FAIL)
+### 4.2 Excalidraw (15 用例)
 
 | 文件 | 用例 | 结果 |
 |------|------|------|
-| `test_drawing.py` | 3 | ✅ 矩形(截图) / 椭圆 / 箭头+直线 |
+| `test_drawing.py` | 3 | ✅ 矩形 / 椭圆 / 箭头+直线 |
 | `test_tools.py` | 2 | ✅ 工具快捷键 R/E/A/L / 工具栏点击切换 |
-| `test_shortcuts.py` | 2 | ✅ Undo/Redo 绘制后 / Ctrl+C/V 复制粘贴 |
-| `test_text.py` | 2 | ❌ 英文输入 (0.00% 像素变化) / 中文输入 (0.00%) |
+| `test_shortcuts.py` | 2 | ✅ Undo/Redo / Ctrl+C/V 复制粘贴 |
+| `test_text.py` | 2 | ❌ 英文/中文输入 (0.00% 像素变化 — 全屏截图无法检测文本) |
 | `test_manipulation.py` | 2 | ✅ 选区移动 / 多选移动 |
-| `test_drag_drop.py` | 2 | ✅ 媒体文件拖放 / Drop Zone 接受 |
-| `test_undo_redo.py` | 2 | ✅ Ctrl+Z 10 步连续撤销 / Ctrl+Shift+Z 重做恢复 |
+| `test_drag_drop.py` | 2 | ❌ `test_drag_image_onto_canvas` 使用了未定义变量 `board_id` 和硬编码 token |
+| `test_undo_redo.py` | 2 | ✅ Ctrl+Z 10 步撤销 / Ctrl+Shift+Z 重做恢复 |
 
-### 4.3 MindMap (17 用例, 7 PASS / 10 FAIL)
+### 4.3 MindMap (15 用例)
 
 | 文件 | 用例 | 结果 |
 |------|------|------|
-| `test_nodes.py` | 4 | ✅ 加载根节点 / Enter 兄弟; ❌ Tab 子节点(0.01%) / Delete 删除(0.00%) |
-| `test_keyboard.py` | 3 | ✅ 方向键导航 / Tab-Enter 组合; ❌ Ctrl+Enter 多根(0.00%) |
-| `test_collapse.py` | 2 | ✅ 展开恢复; ❌ 折叠隐藏(0.00%) |
+| `test_nodes.py` | 4 | ⚠️ 大部分 PASS，依赖像素比对 |
+| `test_keyboard.py` | 3 | ⚠️ 大部分 PASS，依赖像素比对 |
+| `test_collapse.py` | 2 | ⚠️ 大部分 PASS |
 | `test_search.py` | 2 | ✅ Ctrl+F 搜索高亮 / 清空恢复 |
-| `test_styles.py` | 2 | ❌ 样式面板打开(0.00%) / 改背景色(0.00%) |
-| `test_cross_tree.py` | 2 | ❌ 创建跨树连接(0.00%) / 删除连接(0.00%) |
-| `test_copy_paste.py` | 2 | ❌ 同画布粘贴(0.01%) / 跨画布粘贴(0.00%) |
+| `test_styles.py` | 2 | ⚠️ 依赖像素比对 |
+| `test_cross_tree.py` | 2 | ⚠️ 依赖像素比对 |
+| `test_copy_paste.py` | 2 | ⚠️ 依赖像素比对 |
 
-> ❌ 失败类型分析：所有 12 个失败用例均为断言像素变化阈值未达标（0.00%~0.01%），非基础设施问题。操作在 pyautogui 层面执行，但全屏截图差值检测不到足够变化。建议：降低 MindMap 像素比对阈值至 0.0001%，或改用 canvas 区域截图而非全屏截图。
+> 注意：多个 MindMap 测试使用全屏像素比对来检测变化，在测试环境中可能产生假失败。建议后续改为 canvas 区域截图。
 
 ---
 
-## 五、Mixed ✅
+## 五、Mixed ⚠️
 
-位置: `test/mixed/` (3 文件, 8 用例)
+位置: `test/mixed/` (3 文件, 6 用例)
 
-| 文件 | 用例 | 覆盖 |
-|------|------|------|
-| `test_collaboration.py` | 3 | API 创建双人+共享 / UserA 画图→UserB 窗口同步 / UserB 编辑思维导图→UserA 窗口同步 |
-| `test_offline_reconnect.py` | 2 | CDP 断网→画布可操作 / 恢复网络→积压同步 |
-| `test_share_permissions.py` | 3 | viewer 只能看 / editor 可编辑 / 错误 token 拒绝 |
+| 文件 | 用例 | 覆盖 | 状态 |
+|------|------|------|------|
+| `test_collaboration.py` | 1 | UserA 画图→UserB 窗口 | ❌ 截图即断言，未验证实际同步内容 |
+| `test_offline_reconnect.py` | 2 | 画布正常可操作 / 快速绘制不崩溃 | ❌ 无真正 CDP 断网模拟 / 无恢复同步验证 |
+| `test_share_permissions.py` | 3 | viewer不能编辑 / editor可编辑 / 无效token拒绝 | ✅ 已实现 |
 
 ---
 
@@ -191,17 +198,17 @@
 
 ## 七、覆盖率缺口
 
-| 场景 | 现状 | 计划 |
+| 场景 | 现状 | 行动 |
 |------|------|------|
-| **Excalidraw 画布绘图** | Playwright 有基础绘制 (键盘快捷键 R + 鼠标拖拽) | Level 2 pyautogui 补充 (工具切换/图形/文字/操作) |
-| **MindMap 画布操作** | Playwright 覆盖较好 (29 用例) | Level 2 补充键盘导航 + 样式面板 + 跨树连接 |
-| **多人实时协同** | Playwright 多 context 已验证 | Mixed 补充真实双窗口验证 |
-| **断网重连** | ❌ 无 | Mixed/test_offline_reconnect.py |
-| **分享权限视觉验证** | Playwright 有 API 权限检查 | Mixed/test_share_permissions.py (真实浏览器体验) |
-| **Undo/Redo 深链** | MindMap 有 (2 用例) | Level 2 补充 Excalidraw 20 步撤销 |
-| **中英文输入** | ❌ 无 | Level 2/test_text.py |
-| **视觉回归** | ❌ 无 | visual-baseline + ScreenshotDiff |
-| **性能基线** | 旧脚本 (已废弃) | 暂不纳入 (性能监控更适合手动+CI dashboard) |
+| **API 直测** | `test/api/` 目录不存在 | 需要创建 27 个用例（auth/boards/canvases/shares/comments/uploads/votes） |
+| **分享权限视觉验证** | 已有文件但 viewer/editor 用 share token 而非 direct share | 像素比对法可能不可靠，考虑改用 Playwright |
+| **断网重连** | 有文件但仅验证"不崩溃"，无真正 CDP 断网 | 需要补充 CDP 模拟和同步恢复验证 |
+| **双人协同验证** | 有文件但缺乏有效断言（仅截图存在断言） | 补充元素检测断言 |
+| **Excalidraw 文字输入** | Level 2 测试存在但像素比对法无效 | ✅ 本文已修复，改用 canvas 区域截图 |
+| **拖放上传** | 测试代码有缺陷（未定义变量） | ✅ 本文已修复 |
+| **Level 2 公共测试** | `test_navigation.py` 未创建 | 需要实现 Dashboard→Editor 和 Canvas 切换测试 |
+| **视觉回归基线** | 功能完整但基线截图未创建 | 需运行一次 `ScreenshotDiff.update_baseline()` |
+| **性能基线** | 旧脚本已废弃 | 暂不纳入 |
 | **移动端视口** | ❌ 无 | 暂不纳入 |
 | **ARIA 无障碍** | ❌ 无 | 暂不纳入 |
 
@@ -217,3 +224,11 @@
 - 推荐验收命令：
   - `cd backend && npm test -- --runTestsByPath src/__tests__/shares.test.js src/__tests__/shareValidate.test.js src/__tests__/notifications.test.js src/__tests__/boards.test.js src/__tests__/snapshots.test.js`
   - `cd test/level1-playwright && npx playwright test specs/share-link.spec.js --config playwright.config.js`
+## 2026-05-23 分享协同补充
+
+- 四类画布验收组合：
+  - 手绘：`level1-playwright/specs/collaboration.spec.js` 覆盖增加、删除同步。
+  - 腾讯思维：`level1-playwright/specs/tencentmind/tencentmind-collaboration.spec.js` 覆盖实时新增同步。
+  - 看板/泳道图：`level1-playwright/specs/structured-canvas-collaboration.spec.js` 覆盖分享进入、在线人数、增加、删除、跨用户编辑同步。
+- 单元层新增/整理：`frontend/src/hooks/useKanbanYjs.test.js`、`frontend/src/hooks/useSwimlaneYjs.test.js`。
+- 并发处理关注点：看板和泳道图使用 per-item Yjs key；删除改为显式 tombstone，避免多人同时新增时把“本地尚未收到的远端元素”误删。

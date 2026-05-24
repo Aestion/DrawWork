@@ -10,6 +10,19 @@ function extractTencentData(yMap) {
   return null
 }
 
+export function cloneTencentDataForYjs(data) {
+  if (!data) return data
+  return JSON.parse(JSON.stringify(data))
+}
+
+export function shouldApplyTencentHttpPollSnapshot({ connected, synced, snapshot, lastLocalSnapshot = '', lastObservedSnapshot = '' }) {
+  if (connected && synced) return false
+  if (!snapshot) return false
+  if (snapshot === lastLocalSnapshot) return false
+  if (snapshot === lastObservedSnapshot) return false
+  return true
+}
+
 export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   const [tencentData, setTencentData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -40,9 +53,10 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   const syncToYjs = useCallback((data) => {
     if (!yMap || !canEdit) return
     try {
-      lastLocalSnapshotRef.current = JSON.stringify(data)
+      const clonedData = cloneTencentDataForYjs(data)
+      lastLocalSnapshotRef.current = JSON.stringify(clonedData)
       yMap.doc.transact(() => {
-        yMap.set('__tencent_state', data)
+        yMap.set('__tencent_state', clonedData)
       }, 'local-tencentmind-change')
     } catch (err) {
       console.error('[useTencentMindYjs] Failed to sync to Yjs:', err)
@@ -106,11 +120,18 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
     const poll = async () => {
       if (stopped || !initialDataLoaded.current) return
       try {
+        if (connected && synced) return
         const res = await api.get(`/canvases/${canvasId}/tencentmind`)
         const data = res.data?.data
         if (!data?.rootTopic) return
         const snapshot = JSON.stringify(data)
-        if (snapshot === lastObservedSnapshotRef.current) return
+        if (!shouldApplyTencentHttpPollSnapshot({
+          connected,
+          synced,
+          snapshot,
+          lastLocalSnapshot: lastLocalSnapshotRef.current,
+          lastObservedSnapshot: lastObservedSnapshotRef.current
+        })) return
         lastObservedSnapshotRef.current = snapshot
         setTencentData(data)
         Promise.resolve().then(() => {
@@ -126,7 +147,7 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
       stopped = true
       clearInterval(interval)
     }
-  }, [canvasId, token])
+  }, [canvasId, token, connected, synced])
 
   // Fallback: load from HTTP if Yjs doesn't connect within 2 seconds
   const yMapRef = useRef(null)

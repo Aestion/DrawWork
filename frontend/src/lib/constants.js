@@ -4,7 +4,6 @@ export const CANVAS_TYPES = {
   kanban: { label: '看板', icon: '📋' },
   swimlane: { label: '泳道图', icon: '🏊' },
   simplemindmap: { label: 'Mind-Map (不推荐)', icon: '🧩', deprecated: true },
-  mindelixir: { label: 'Mind Elixir (不推荐)', icon: '💎', deprecated: true },
   mindmap: { label: '思维导图 (不推荐)', icon: '🧠', deprecated: true }
 }
 

@@ -69,7 +69,6 @@ vi.mock('../components/ui/Toast', () => ({
 
 vi.mock('../components/Editor/ExcalidrawWrapper', () => ({ default: () => null }))
 vi.mock('../components/Editor/SimpleMindMapEditor', () => ({ default: () => null }))
-vi.mock('../components/Editor/MindElixirEditor', () => ({ default: () => null }))
 vi.mock('../components/Editor/MindMapEditor', () => ({ default: () => null }))
 vi.mock('../components/Editor/KanbanEditor', () => ({ default: () => null }))
 vi.mock('../components/Editor/SwimlaneEditor', () => ({ default: () => null }))

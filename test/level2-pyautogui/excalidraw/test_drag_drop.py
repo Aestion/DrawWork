@@ -28,13 +28,16 @@ def editor(coord, services):
         "email": f"l2_dnd_{ts}@test.com",
         "password": "TestPass123!",
     })
-    api.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+    token = resp.json()["token"]
+    api.headers["Authorization"] = f"Bearer {token}"
     board = api.post("http://localhost:3000/api/boards", json={"name": f"DnD Board {ts}"})
-    webbrowser.open(f"http://localhost:5173/board/{board.json()['id']}")
+    board_id = board.json()["id"]
+
+    webbrowser.open(f"http://localhost:5173/board/{board_id}")
     time.sleep(4)
     coord.locate_window()
     time.sleep(1)
-    return coord
+    return {"coord": coord, "token": token, "board_id": board_id}
 
 
 @pytest.mark.level2
@@ -46,7 +49,9 @@ def test_drag_image_onto_canvas(editor):
     a) The upload endpoint is accessible (covered by API test)
     b) The canvas is ready to accept drops
     """
-    coord = editor
+    coord = editor["coord"]
+    token = editor["token"]
+    board_id = editor["board_id"]
     diff = ScreenshotDiff()
 
     # Create a small test PNG
@@ -68,8 +73,8 @@ def test_drag_image_onto_canvas(editor):
         api_resp = req.post(
             "http://localhost:3000/api/upload",
             files={"file": ("test_drag.png", f, "image/png")},
-            data={"boardId": board_id} if 'board_id' in dir() else {},
-            headers={"Authorization": "replace_with_token"},
+            data={"boardId": board_id},
+            headers={"Authorization": f"Bearer {token}"},
         )
 
     after = diff.capture_fullscreen("l2_drag_image_after")
@@ -82,7 +87,7 @@ def test_drag_image_onto_canvas(editor):
 @pytest.mark.level2
 def test_canvas_accepts_file_drop_zone(editor):
     """Verify canvas is interactive and ready for drops — no error state."""
-    coord = editor
+    coord = editor["coord"]
     diff = ScreenshotDiff()
 
     # Click around the canvas to ensure it's interactive

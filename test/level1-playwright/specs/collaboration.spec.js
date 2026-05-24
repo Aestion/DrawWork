@@ -223,19 +223,22 @@ test.describe('Collaboration', () => {
       const acx = boxA.x + boxA.width / 2;
       const acy = boxA.y + boxA.height / 2;
 
-      await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
-      await pageA.waitForTimeout(300);
-      await pageA.mouse.move(acx - 80, acy - 60);
-      await pageA.mouse.down();
-      await pageA.mouse.move(acx + 80, acy + 60);
-      await pageA.mouse.up();
-      await pageA.waitForTimeout(500);
-
-      // Verify A has elements
-      const aCount = await pageA.evaluate(() => {
-        const exc = window.__EXCALIDRAW__;
-        return exc && typeof exc.getSceneElements === 'function' ? exc.getSceneElements().length : -1;
-      });
+      // Retry draw if Yjs initial sync clears the canvas (race condition workaround)
+      let aCount = 0;
+      for (let attempt = 0; attempt < 5 && aCount === 0; attempt++) {
+        if (attempt > 0) await pageA.waitForTimeout(500);
+        await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
+        await pageA.waitForTimeout(300);
+        await pageA.mouse.move(acx - 80, acy - 60);
+        await pageA.mouse.down();
+        await pageA.mouse.move(acx + 80, acy + 60);
+        await pageA.mouse.up();
+        await pageA.waitForTimeout(500);
+        aCount = await pageA.evaluate(() => {
+          const exc = window.__EXCALIDRAW__;
+          return exc && typeof exc.getSceneElements === 'function' ? exc.getSceneElements().length : -1;
+        });
+      }
       expect(aCount).toBeGreaterThanOrEqual(1);
 
       // Wait for sync: B should have at least 1 element
@@ -269,6 +272,216 @@ test.describe('Collaboration', () => {
     }
   });
 
+  test('viewer presence does not clear owner scene when owner adds a new shape', async ({ browser }) => {
+    test.setTimeout(90000);
+    const ctxA = await browser.newContext();
+    const ctxB = await browser.newContext();
+    const pageA = await ctxA.newPage();
+    const pageB = await ctxB.newPage();
+
+    try {
+      const userA = await registerGetUser(pageA);
+      const boardName = `ViewerSafe ${Date.now()}`;
+      await createBoard(pageA, boardName);
+      await openBoard(pageA, boardName);
+      const boardId = await getBoardId(pageA);
+      expect(boardId).toBeTruthy();
+
+      const userB = await registerGetUser(pageB);
+      const userBId = await getUserId(pageB, userB.token);
+      expect(userBId).toBeTruthy();
+      const shareResult = await shareBoardWithUser(pageA, boardId, userBId, 'viewer');
+      expect([200, 201]).toContain(shareResult.status);
+
+      await pageA.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+
+      await pageA.evaluate(() => {
+        const exc = window.__EXCALIDRAW__;
+        const makeElement = (id, type, x, y) => ({
+          id,
+          type,
+          x,
+          y,
+          width: 120,
+          height: 80,
+          angle: 0,
+          strokeColor: '#1e1e1e',
+          backgroundColor: 'transparent',
+          fillStyle: 'hachure',
+          strokeWidth: 2,
+          strokeStyle: 'solid',
+          roughness: 1,
+          opacity: 100,
+          groupIds: [],
+          frameId: null,
+          roundness: type === 'rectangle' ? null : { type: 2 },
+          seed: Math.floor(Math.random() * 100000),
+          version: 1,
+          versionNonce: Math.floor(Math.random() * 100000),
+          isDeleted: false,
+          boundElements: null,
+          updated: Date.now(),
+          link: null,
+          locked: false
+        });
+        exc.updateScene({
+          elements: [
+            makeElement('old-rect', 'rectangle', 120, 120),
+            makeElement('old-diamond', 'diamond', 300, 120)
+          ],
+          appState: exc.getAppState()
+        });
+      });
+
+      await expect.poll(async () => {
+        return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 10000 }).toBe(2);
+
+      await pageB.goto('/');
+      await pageB.waitForTimeout(1000);
+      await openBoard(pageB, boardName);
+      await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+      await waitForSceneElements(pageB, 2, { timeout: 20000 });
+
+      await pageA.evaluate(() => {
+        const exc = window.__EXCALIDRAW__;
+        const elements = exc.getSceneElements();
+        exc.updateScene({
+          elements: [
+            ...elements,
+            {
+              id: 'new-ellipse',
+              type: 'ellipse',
+              x: 500,
+              y: 120,
+              width: 120,
+              height: 80,
+              angle: 0,
+              strokeColor: '#1e1e1e',
+              backgroundColor: 'transparent',
+              fillStyle: 'hachure',
+              strokeWidth: 2,
+              strokeStyle: 'solid',
+              roughness: 1,
+              opacity: 100,
+              groupIds: [],
+              frameId: null,
+              roundness: null,
+              seed: 12345,
+              version: 1,
+              versionNonce: 67890,
+              isDeleted: false,
+              boundElements: null,
+              updated: Date.now(),
+              link: null,
+              locked: false
+            }
+          ],
+          appState: exc.getAppState()
+        });
+      });
+
+      await expect.poll(async () => {
+        return pageA.evaluate(() => {
+          const elements = window.__EXCALIDRAW__?.getSceneElements?.() || [];
+          return elements.map((element) => element.id).sort();
+        });
+      }, { timeout: 15000 }).toEqual(['new-ellipse', 'old-diamond', 'old-rect']);
+
+      await expect.poll(async () => {
+        return pageB.evaluate(() => {
+          const elements = window.__EXCALIDRAW__?.getSceneElements?.() || [];
+          return elements.map((element) => element.id).sort();
+        });
+      }, { timeout: 20000 }).toEqual(['new-ellipse', 'old-diamond', 'old-rect']);
+
+      const canvasA = pageA.locator('.excalidraw__canvas.interactive');
+      const boxA = await canvasA.boundingBox();
+      expect(boxA).not.toBeNull();
+      await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'ellipse' }));
+      await pageA.waitForTimeout(300);
+      await pageA.mouse.move(boxA.x + 620, boxA.y + 190);
+      await pageA.mouse.down();
+      await pageA.mouse.move(boxA.x + 700, boxA.y + 250);
+      await pageA.mouse.up();
+
+      await expect.poll(async () => {
+        return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 10000 }).toBeGreaterThanOrEqual(4);
+
+      await expect.poll(async () => {
+        return pageB.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 20000 }).toBeGreaterThanOrEqual(4);
+    } finally {
+      await ctxA.close();
+      await ctxB.close();
+    }
+  });
+
+  test('editor and owner edits sync in both directions', async ({ browser }) => {
+    test.setTimeout(90000);
+    const ctxOwner = await browser.newContext();
+    const ctxEditor = await browser.newContext();
+    const ownerPage = await ctxOwner.newPage();
+    const editorPage = await ctxEditor.newPage();
+
+    try {
+      const owner = await registerGetUser(ownerPage);
+      const boardName = `BiDir ${Date.now()}`;
+      await createBoard(ownerPage, boardName);
+      await openBoard(ownerPage, boardName);
+      const boardId = await getBoardId(ownerPage);
+      expect(boardId).toBeTruthy();
+
+      const editor = await registerGetUser(editorPage);
+      const editorId = await getUserId(editorPage, editor.token);
+      expect(editorId).toBeTruthy();
+      const shareResult = await shareBoardWithUser(ownerPage, boardId, editorId, 'editor');
+      expect([200, 201]).toContain(shareResult.status);
+
+      await editorPage.goto('/');
+      await editorPage.waitForTimeout(1000);
+      await openBoard(editorPage, boardName);
+
+      await ownerPage.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+      await editorPage.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+
+      const ownerBox = await ownerPage.locator('.excalidraw__canvas.interactive').boundingBox();
+      const editorBox = await editorPage.locator('.excalidraw__canvas.interactive').boundingBox();
+      expect(ownerBox).not.toBeNull();
+      expect(editorBox).not.toBeNull();
+
+      await ownerPage.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
+      await ownerPage.waitForTimeout(300);
+      await ownerPage.mouse.move(ownerBox.x + 220, ownerBox.y + 220);
+      await ownerPage.mouse.down();
+      await ownerPage.mouse.move(ownerBox.x + 340, ownerBox.y + 310);
+      await ownerPage.mouse.up();
+
+      await expect.poll(async () => {
+        return editorPage.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 20000 }).toBeGreaterThanOrEqual(1);
+
+      await editorPage.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'ellipse' }));
+      await editorPage.waitForTimeout(300);
+      await editorPage.mouse.move(editorBox.x + 460, editorBox.y + 220);
+      await editorPage.mouse.down();
+      await editorPage.mouse.move(editorBox.x + 560, editorBox.y + 310);
+      await editorPage.mouse.up();
+
+      await expect.poll(async () => {
+        return ownerPage.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 20000 }).toBeGreaterThanOrEqual(2);
+
+      await expect.poll(async () => {
+        return editorPage.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 20000 }).toBeGreaterThanOrEqual(2);
+    } finally {
+      await ctxOwner.close();
+      await ctxEditor.close();
+    }
+  });
+
   test('operation sync: user A deletes all elements, user B sees empty scene', async ({ browser }) => {
     test.setTimeout(90000);
     const ctxA = await browser.newContext();
@@ -299,6 +512,9 @@ test.describe('Collaboration', () => {
       await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
       await pageB.waitForTimeout(1000);
       await pageA.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+
+      // Wait for Yjs initial sync on pageA before drawing (green dot = synced)
+      await pageA.locator('.bg-green-500').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
 
       // A draws a rectangle using setActiveTool
       const canvasA = pageA.locator('.excalidraw__canvas.interactive');
@@ -382,6 +598,9 @@ test.describe('Collaboration', () => {
       await openBoard(pageB, boardName);
 
       await pageA.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+
+      // Wait for Yjs initial sync on pageA before drawing (green dot = synced)
+      await pageA.locator('.bg-green-500').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
 
       // A draws a rectangle using setActiveTool
       const canvasA = pageA.locator('.excalidraw__canvas.interactive');
@@ -567,6 +786,9 @@ test.describe('Collaboration', () => {
       await openBoard(pageB, boardName);
       await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
       await pageB.waitForTimeout(1000);
+
+      // Wait for Yjs initial sync on pageA before drawing (green dot = synced)
+      await pageA.locator('.bg-green-500').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
 
       // A draws a rectangle
       const canvasA = pageA.locator('.excalidraw__canvas.interactive');

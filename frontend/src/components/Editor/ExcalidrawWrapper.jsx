@@ -199,6 +199,85 @@ function buildRenderableFiles(files) {
   return { ...(files || {}) }
 }
 
+export function mergeSceneFiles(existingFiles, nextFiles) {
+  return {
+    ...(existingFiles || {}),
+    ...(nextFiles || {})
+  }
+}
+
+function elementVersion(element) {
+  return typeof element?.version === 'number' ? element.version : 0
+}
+
+function shouldUseRemoteElement(localElement, remoteElement) {
+  if (!localElement) return true
+  if (!remoteElement) return false
+
+  const localVersion = elementVersion(localElement)
+  const remoteVersion = elementVersion(remoteElement)
+  if (remoteVersion > localVersion) return true
+  if (remoteVersion < localVersion) return false
+
+  if (remoteElement.versionNonce !== localElement.versionNonce) {
+    return false
+  }
+
+  return true
+}
+
+export function reconcileSceneElements(localElements, remoteElements) {
+  const resultById = new Map()
+  const orderedIds = []
+
+  ;(localElements || []).forEach((element) => {
+    if (!element?.id) return
+    resultById.set(element.id, element)
+    orderedIds.push(element.id)
+  })
+
+  ;(remoteElements || []).forEach((remoteElement) => {
+    if (!remoteElement?.id) return
+    if (!resultById.has(remoteElement.id)) {
+      orderedIds.push(remoteElement.id)
+      resultById.set(remoteElement.id, remoteElement)
+      return
+    }
+
+    const localElement = resultById.get(remoteElement.id)
+    if (shouldUseRemoteElement(localElement, remoteElement)) {
+      resultById.set(remoteElement.id, remoteElement)
+    }
+  })
+
+  return orderedIds.map((id) => resultById.get(id)).filter(Boolean)
+}
+
+export function withDeletedElementTombstones(previousElements, nextElements) {
+  const nextById = new Map()
+  const result = []
+
+  ;(nextElements || []).forEach((element) => {
+    if (!element?.id) return
+    nextById.set(element.id, element)
+    result.push(element)
+  })
+
+  ;(previousElements || []).forEach((previousElement) => {
+    if (!previousElement?.id || previousElement.isDeleted || nextById.has(previousElement.id)) {
+      return
+    }
+
+    result.push({
+      ...previousElement,
+      isDeleted: true,
+      version: elementVersion(previousElement) + 1
+    })
+  })
+
+  return result
+}
+
 // Laser pointer fade timeout (remote elements received via Yjs)
 const LASER_FADE_MS = 2000
 
@@ -332,7 +411,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     return roomId || null
   }, [roomId])
 
-  const { connected, synced, onlineCount, connectedRef, setData, observe, updateAwareness, getAwarenessStates } = useYjs(effectiveRoomId, token)
+  const { connected, synced, onlineCount, connectedRef, setData, getData, observe, updateAwareness, getAwarenessStates } = useYjs(effectiveRoomId, token)
 
   // Collaboration cursors
   const { user } = useAuthStore()
@@ -341,8 +420,10 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
 
   const syncedRef = useRef(synced)
   const canEditRef = useRef(canEdit)
+  const isActiveRef = useRef(isActive)
   useEffect(() => { syncedRef.current = synced }, [synced])
   useEffect(() => { canEditRef.current = canEdit }, [canEdit])
+  useEffect(() => { isActiveRef.current = isActive }, [isActive])
 
   // When transitioning from inactive to active, trigger Excalidraw to
   // recalculate its dimensions (the container goes from display:none to visible)
@@ -547,9 +628,10 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
 
   const applyScene = useCallback((apiInstance, rawData) => {
     // 提取原始数据，sceneRef.current 永远存未过滤的原始版本
-    const elements = Array.isArray(rawData?.elements) ? [...rawData.elements] : []
+    const remoteElements = Array.isArray(rawData?.elements) ? [...rawData.elements] : []
+    const elements = reconcileSceneElements(sceneRef.current.elements, remoteElements)
     const remoteAppState = rawData?.appState || {}
-    const files = rawData?.files || {}
+    const files = mergeSceneFiles(sceneRef.current.files, rawData?.files)
 
     // Preserve local view state (scroll, zoom) when applying remote changes
     const localAppState = apiInstance.getAppState()
@@ -574,7 +656,9 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     const renderableElements = toRenderableElements(filteredElements)
     const renderableFiles = buildRenderableFiles(filteredFiles)
 
-    console.debug('[applyScene] applying', elements.length, 'elements,', Object.keys(files || {}).length, 'files -> renderable', renderableElements.length, 'elements')
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[applyScene] applying', elements.length, 'elements,', Object.keys(files || {}).length, 'files -> renderable', renderableElements.length, 'elements')
+    }
 
     if (Object.keys(renderableFiles).length > 0) {
       apiInstance.addFiles(Object.values(renderableFiles))
@@ -627,6 +711,47 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       }
     })
   }, [queueOverlayStateUpdate])
+
+  useEffect(() => {
+    if (!isActive) return
+    const apiInstance = excalidrawRef.current
+    const currentScene = sceneRef.current
+    if (!apiInstance || !currentScene) return
+
+    remoteApplyRef.current = true
+    applyScene(apiInstance, currentScene)
+    requestAnimationFrame(() => {
+      remoteApplyRef.current = false
+    })
+  }, [applyScene, isActive])
+
+  useEffect(() => {
+    if (!isActive || !effectiveRoomId || !getData) return
+
+    const intervalId = setInterval(() => {
+      const apiInstance = excalidrawRef.current
+      if (!apiInstance || remoteApplyRef.current) return
+
+      const data = getData()
+      if (!data) return
+
+      const nextScene = {
+        elements: reconcileSceneElements(sceneRef.current.elements, data.elements || []),
+        appState: data.appState || {},
+        files: mergeSceneFiles(sceneRef.current.files, data.files || {})
+      }
+      const signature = stableSceneSignature(nextScene.elements, nextScene.appState, nextScene.files)
+      if (signature === lastSceneSignatureRef.current) return
+
+      remoteApplyRef.current = true
+      applyScene(apiInstance, nextScene)
+      requestAnimationFrame(() => {
+        remoteApplyRef.current = false
+      })
+    }, 1000)
+
+    return () => clearInterval(intervalId)
+  }, [applyScene, effectiveRoomId, getData, isActive])
 
   useEffect(() => {
     setReady(true)
@@ -835,8 +960,6 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
         }
       }
 
-      sceneRef.current = nextScene
-
       if (meta.source === 'local') {
         // handleChange already called queueOverlayStateUpdate with the full
         // appState (including scroll/zoom). The Yjs data only stores the filtered
@@ -858,31 +981,47 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       }
 
       hasInitialSyncRef.current = true
-      setSceneData(nextScene)
 
-      const signature = stableSceneSignature(nextScene.elements, nextScene.appState, nextScene.files)
+      const mergedScene = {
+        elements: reconcileSceneElements(sceneRef.current.elements, nextScene.elements),
+        appState: nextScene.appState,
+        files: mergeSceneFiles(sceneRef.current.files, nextScene.files)
+      }
+
+      const signature = stableSceneSignature(mergedScene.elements, mergedScene.appState, mergedScene.files)
       if (signature === lastSceneSignatureRef.current && meta.source !== 'initial') {
-        queueOverlayStateUpdate(nextScene.elements, nextScene.appState)
+        queueOverlayStateUpdate(mergedScene.elements, mergedScene.appState)
         return
       }
 
       const apiInstance = excalidrawRef.current
       if (!apiInstance) {
         lastSceneSignatureRef.current = signature
-        queueOverlayStateUpdate(nextScene.elements, nextScene.appState)
-        console.debug('[observe] no apiInstance yet, queued overlay update')
+        sceneRef.current = mergedScene
+        setSceneData(mergedScene)
+        queueOverlayStateUpdate(mergedScene.elements, mergedScene.appState)
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[observe] no apiInstance yet, queued overlay update')
+        }
+        return
+      }
+
+      if (!isActiveRef.current) {
+        lastSceneSignatureRef.current = signature
+        sceneRef.current = mergedScene
+        setSceneData(mergedScene)
         return
       }
 
       remoteApplyRef.current = true
-      applyScene(apiInstance, nextScene)
+      applyScene(apiInstance, mergedScene)
 
       // Populate overlay state so media fetch fires for GIFs/videos.
       // The snapshot path calls queueOverlayStateUpdate before applyScene (line 611),
       // but the Yjs initial sync path was missing this call — the observer only
       // calls queueOverlayStateUpdate when signature matches (line 654), which
       // is never true on initial sync (signature always differs from empty default).
-      queueOverlayStateUpdate(nextScene.elements, nextScene.appState)
+      queueOverlayStateUpdate(mergedScene.elements, mergedScene.appState)
 
       requestAnimationFrame(() => {
         remoteApplyRef.current = false
@@ -893,6 +1032,8 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
   }, [applyScene, observe, queueOverlayStateUpdate, roomId])
 
   const handleChange = useCallback((elements, appState, files) => {
+    if (!isActiveRef.current) return
+
     queueOverlayStateUpdate(elements, appState)
 
     // Detect drag/resize/edit interaction from live appState to hide overlay and
@@ -929,6 +1070,14 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     // causing empty elements to be written to the yMap. On CRDT merge, the empty
     // array wins due to higher clock, erasing all elements for all collaborators.
     if (!syncedRef.current && (!elements || elements.length === 0)) {
+      return
+    }
+
+    // ✨ CRITICAL GUARD: Don't push empty data before Yjs observer has processed initial state.
+    // After syncedRef becomes true, Excalidraw may fire onChange with empty scene before
+    // the observer's initial guard (hasInitialSyncRef) has run. Writing empty data to Y.Map
+    // here would wipe elements from other users, causing sync failures in collaboration tests.
+    if (!hasInitialSyncRef.current && (!elements || elements.length === 0)) {
       return
     }
 
@@ -981,10 +1130,12 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       ...syncableAppState
     } = appState || {}
 
+    const mergedFiles = mergeSceneFiles(sceneRef.current.files, files)
+    const syncElements = withDeletedElementTombstones(sceneRef.current.elements, elements || [])
     const nextScene = {
-      elements: elements || [],
+      elements: syncElements,
       appState: syncableAppState,
-      files: files || {}
+      files: mergedFiles
     }
     const signature = stableSceneSignature(nextScene.elements, nextScene.appState, nextScene.files)
 
@@ -992,7 +1143,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       return
     }
 
-    sceneRef.current = { elements: elements || [], appState: syncableAppState, files }
+    sceneRef.current = { elements: syncElements, appState: syncableAppState, files: mergedFiles }
     lastSceneSignatureRef.current = signature
 
     // Debounce sync to 200ms to avoid overwhelming Yjs with rapid updates.

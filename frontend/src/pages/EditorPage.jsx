@@ -6,7 +6,6 @@ import { useCanvasStore } from '../stores/canvasStore'
 import CanvasSidebar from '../components/Editor/CanvasSidebar'
 const ExcalidrawWrapper = lazy(() => import('../components/Editor/ExcalidrawWrapper'))
 const SimpleMindMapEditor = lazy(() => import('../components/Editor/SimpleMindMapEditor'))
-const MindElixirEditor = lazy(() => import('../components/Editor/MindElixirEditor'))
 const TencentMindEditor = lazy(() => import('../components/Editor/TencentMindEditor'))
 import MindMapEditor from '../components/Editor/MindMapEditor'
 import KanbanEditor from '../components/Editor/KanbanEditor'
@@ -83,7 +82,6 @@ export default function EditorPage() {
   const mindMapRef = useRef(null)
   const excalidrawRef = useRef(null)
   const simpleMindMapRef = useRef(null)
-  const mindElixirRef = useRef(null)
   const tencentMindRef = useRef(null)
   const [snapshotSaving, setSnapshotSaving] = useState(false)
 
@@ -213,6 +211,15 @@ export default function EditorPage() {
 
     return () => clearTimeout(timeoutId)
   }, [user, boardId, board, initialLoadDone, fetchCanvases])
+
+  // Poll for canvas list changes so collaborators see new/renamed/deleted canvases
+  useEffect(() => {
+    if (!boardId || !board) return
+    const interval = setInterval(() => {
+      fetchCanvases(boardId)
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [boardId, board, fetchCanvases])
 
   // For newly created boards, if permission is undefined but user is the owner via board.owner_id, allow edit
   const canEdit = board?.permission === 'owner' || board?.permission === 'editor' ||
@@ -367,20 +374,7 @@ export default function EditorPage() {
                           />
                         </Suspense>
                       </ErrorBoundary>
-                    ) : canvas.type === 'mindelixir' ? (
-                      <ErrorBoundary>
-                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载 Mind Elixir...</div>}>
-                          <MindElixirEditor
-                            canvasId={canvas.id}
-                            roomId={canvas.yjs_room_id}
-                            canEdit={canEdit}
-                            boardId={boardId}
-                            onConnectionChange={handleConnectionChange}
-                            isActive={isActive}
-                          />
-                        </Suspense>
-                      </ErrorBoundary>
-                    ) : canvas.type === 'mindmap' ? (
+                    ) : canvas.type === 'mindelixir' || canvas.type === 'mindmap' ? (
                       <ErrorBoundary>
                         <MindMapEditor
                           ref={mindMapRef}

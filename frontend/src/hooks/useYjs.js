@@ -18,7 +18,7 @@ const DESTROY_DELAY = 100  // Flush immediately after React unmount cycle
 
 // Reconstruct elements array from per-element Y.Map keys (__el_{id}).
 // Falls back to old monolithic 'elements' key for backward compatibility.
-function extractData(yMap) {
+export function extractData(yMap) {
   const json = yMap.toJSON()
   const elements = []
   for (const key of Object.keys(json)) {
@@ -33,6 +33,52 @@ function extractData(yMap) {
     appState: json.__appState || json.appState || {},
     files: json.__files || json.files || {}
   }
+}
+
+function migrateLegacyElements(yMap) {
+  const json = yMap.toJSON()
+  const hasElementKeys = Object.keys(json).some((key) => key.startsWith('__el_'))
+  if (hasElementKeys || !Array.isArray(json.elements)) return
+
+  for (const element of json.elements) {
+    if (element?.id) {
+      yMap.set('__el_' + element.id, element)
+    }
+  }
+}
+
+export function writeSceneToYMap(yMap, data) {
+  migrateLegacyElements(yMap)
+
+  const nextElements = data.elements || []
+  const hasExistingElements = Array.from(yMap.keys()).some((key) => key.startsWith('__el_'))
+
+  if (nextElements.length === 0 && hasExistingElements) {
+    yMap.forEach((value, key) => {
+      if (!key.startsWith('__el_')) return
+      const previous = value || {}
+      const previousVersion = typeof previous.version === 'number' ? previous.version : 0
+      yMap.set(key, {
+        ...previous,
+        id: previous.id || key.slice(5),
+        isDeleted: true,
+        version: previousVersion + 1
+      })
+    })
+  } else {
+    for (const element of nextElements) {
+      if (element?.id) {
+        yMap.set('__el_' + element.id, element)
+      }
+    }
+  }
+
+  yMap.set('__appState', data.appState || {})
+  yMap.set('__files', data.files || {})
+}
+
+export function shouldEmitSyncEvent(lastSync, isSynced) {
+  return isSynced === true || lastSync !== isSynced
 }
 
 function getConnection(roomId, token, type = 'excalidraw') {
@@ -83,7 +129,7 @@ function getConnection(roomId, token, type = 'excalidraw') {
 
   provider.on('sync', (isSynced) => {
     // 状态防抖：只有在状态真正变化时才触发事件
-    if (conn.lastSync !== isSynced) {
+    if (shouldEmitSyncEvent(conn.lastSync, isSynced)) {
       conn.lastSync = isSynced
       conn.syncListeners.forEach((cb) => cb(isSynced))
     }
@@ -111,11 +157,7 @@ function releaseConnection(roomId, type) {
       conn.pendingData = null
       try {
         conn.doc.transact(() => {
-          for (const el of (pending.elements || [])) {
-            conn.yMap.set('__el_' + el.id, el)
-          }
-          conn.yMap.set('__appState', pending.appState || {})
-          conn.yMap.set('__files', pending.files || {})
+          writeSceneToYMap(conn.yMap, pending)
         }, 'local-scene-change')
       } catch (err) {
         console.error('[useYjs] Failed to flush pending data:', err)
@@ -203,24 +245,18 @@ export function useYjs(roomId, token, options = {}) {
       if (syncedRef.current !== isSynced) {
         syncedRef.current = isSynced
         setSynced(isSynced)
+      }
 
-        if (isSynced) {
-          // Notify observers of initial state
-          const data = extractData(conn.yMap)
-          conn.observers.forEach((cb) => cb(data, { source: 'initial' }))
+      if (isSynced) {
+        const data = extractData(conn.yMap)
+        conn.observers.forEach((cb) => cb(data, { source: 'initial' }))
 
-          // Flush pending data
-          if (conn.pendingData) {
-            const pending = conn.pendingData
-            conn.pendingData = null
-            conn.doc.transact(() => {
-              for (const el of (pending.elements || [])) {
-                conn.yMap.set('__el_' + el.id, el)
-              }
-              conn.yMap.set('__appState', pending.appState || {})
-              conn.yMap.set('__files', pending.files || {})
-            }, 'local-scene-change')
-          }
+        if (conn.pendingData) {
+          const pending = conn.pendingData
+          conn.pendingData = null
+          conn.doc.transact(() => {
+            writeSceneToYMap(conn.yMap, pending)
+          }, 'local-scene-change')
         }
       }
     }
@@ -292,24 +328,7 @@ export function useYjs(roomId, token, options = {}) {
     }
 
     conn.doc.transact(() => {
-      // Track which element IDs are in the new data
-      const newIds = new Set()
-      for (const el of (data.elements || [])) {
-        newIds.add(el.id)
-        conn.yMap.set('__el_' + el.id, el)
-      }
-      // Remove element keys that no longer exist
-      const keysToDelete = []
-      conn.yMap.forEach((value, key) => {
-        if (key.startsWith('__el_') && !newIds.has(key.slice(5))) {
-          keysToDelete.push(key)
-        }
-      })
-      for (const key of keysToDelete) {
-        conn.yMap.delete(key)
-      }
-      conn.yMap.set('__appState', data.appState || {})
-      conn.yMap.set('__files', data.files || {})
+      writeSceneToYMap(conn.yMap, data)
     }, 'local-scene-change')
   }, [])
 

@@ -107,9 +107,12 @@ async function getDb() {
   return db
 }
 
-// Only set up Redis pub/sub for cross-instance message relay when explicitly configured.
-// In single-server setups (common for dev), leave REDIS_URL unset and this is skipped.
-const redisUrl = process.env.REDIS_URL
+// Redis may be used by the API for ordinary app notifications. Do not forward
+// those messages to y-websocket clients: the Yjs client expects y-protocol
+// binary frames, and arbitrary JSON/text frames can break live collaboration.
+// Cross-instance Yjs pub/sub must be enabled explicitly with a yjs-specific
+// protocol/channel implementation.
+const redisUrl = process.env.YJS_REDIS_PUBSUB === 'true' ? process.env.REDIS_URL : null
 const redisSub = redisUrl ? new Redis(redisUrl) : null
 
 const userConnections = new Map()
@@ -138,7 +141,10 @@ function hasPermission(currentPermission, requiredPermission) {
 
 function verifyLocalToken(token) {
   const secret = process.env.JWT_SECRET
-  if (!secret) return null
+  if (!secret) {
+    console.error('[Yjs] JWT_SECRET not set')
+    return null
+  }
 
   try {
     const decoded = jwt.verify(token, secret)
@@ -465,6 +471,21 @@ wss.on('connection', async (ws, req) => {
     const authUser = await authenticateToken(token)
 
     const meta = await loadRoomMeta(roomName, authUser.userId)
+    if (!meta) {
+      console.log('[Yjs DEBUG] loadRoomMeta=null for room="' + roomName + '" userId=' + authUser.userId + ' req.url=' + (req.url || '').substring(0, 200))
+      // Diagnostic: check if canvas exists
+      try {
+        const database = await getDb()
+        const canvasRow = await database.run('SELECT id FROM canvases WHERE yjs_room_id = $1 AND is_deleted = FALSE', [roomName])
+        if (canvasRow.rows && canvasRow.rows.length > 0) {
+          console.log('[Yjs DEBUG] Canvas EXISTS for room, but query returned null')
+        } else {
+          console.log('[Yjs DEBUG] Canvas NOT FOUND for this room in database')
+        }
+      } catch(e) {
+        console.log('[Yjs DEBUG] Diag query error:', e.message)
+      }
+    }
     if (!meta || !hasPermission(meta.permission, 'viewer')) {
       ws.close(1008, 'No access permission')
       return
@@ -488,7 +509,11 @@ wss.on('connection', async (ws, req) => {
     await getOrCreateDoc(roomName, meta.canvasId)
     setupWSConnection(ws, req, { docName: roomName })
 
-    ws.on('close', async () => {
+    ws.on('error', (err) => {
+      console.error(`[Yjs] Socket error for user ${authUser.userId} room ${roomName}:`, err.message)
+    })
+
+    ws.on('close', async (code, reason) => {
       const connections = userConnections.get(authUser.userId)
       if (connections) {
         connections.delete(ws)
@@ -533,7 +558,8 @@ wss.on('connection', async (ws, req) => {
         roomConnections.set(roomName, count)
       }
 
-      console.log(`[Yjs] User ${authUser.userId} disconnected from room ${roomName} (clients: ${Math.max(count, 0)})`)
+      const reasonText = reason?.toString() || ''
+      console.log(`[Yjs] User ${authUser.userId} disconnected from room ${roomName} code=${code} reason="${reasonText}" (clients: ${Math.max(count, 0)})`)
     })
   } catch (err) {
     console.error('[Yjs] Auth error:', err.stack || err.message)

@@ -270,6 +270,29 @@ describe('tencent-mind-utils', () => {
       ])
     })
 
+    it('should preserve a marked node subtree when saving marker metadata', () => {
+      const smmData = {
+        data: { text: 'Root', _tencentMeta: { id: 'root' } },
+        children: [{
+          data: {
+            text: 'Marked Parent',
+            icon: ['tencent_question'],
+            _tencentMeta: { id: 'marked-parent' }
+          },
+          children: [
+            { data: { text: 'Child 1', _tencentMeta: { id: 'child1' } }, children: [] },
+            { data: { text: 'Child 2', _tencentMeta: { id: 'child2' } }, children: [] }
+          ]
+        }]
+      }
+
+      const result = simpleMindMapToTencent(smmData, null)
+      const parent = result.rootTopic.children.attached[0]
+
+      expect(parent.markers).toEqual([expect.objectContaining({ markerId: 'symbol-question' })])
+      expect(parent.children.attached.map(child => child.id)).toEqual(['child1', 'child2'])
+    })
+
     it('should remove stale marker metadata when all icons are removed', () => {
       const smmData = {
         data: { text: 'Root', _tencentMeta: { id: 'root' } },
@@ -312,6 +335,107 @@ describe('tencent-mind-utils', () => {
       const child = result.rootTopic.children.attached[0]
 
       expect(child.extensions['drawwork.generalization']).toEqual([{ text: 'New summary', range: [0, 1] }])
+    })
+
+    it('should preserve all regular children when saving a node with generalization metadata', () => {
+      const smmData = {
+        data: { text: 'Root', _tencentMeta: { id: 'root' } },
+        children: [{
+          data: {
+            text: 'Parent',
+            generalization: [{ text: 'Summary', range: [0, 1] }],
+            _tencentMeta: { id: 'parent' }
+          },
+          children: [
+            { data: { text: 'Child 1', _tencentMeta: { id: 'child1' } }, children: [] },
+            { data: { text: 'Child 2', _tencentMeta: { id: 'child2' } }, children: [] },
+            { data: { text: 'Child 3', _tencentMeta: { id: 'child3' } }, children: [] }
+          ]
+        }]
+      }
+
+      const result = simpleMindMapToTencent(smmData, null)
+      const parent = result.rootTopic.children.attached[0]
+
+      expect(parent.children.attached.map(child => child.id)).toEqual(['child1', 'child2', 'child3'])
+      expect(parent.extensions['drawwork.generalization']).toEqual([{ text: 'Summary', range: [0, 1] }])
+    })
+
+    it('should preserve a media node subtree when saving media metadata', () => {
+      const smmData = {
+        data: { text: 'Root', _tencentMeta: { id: 'root' } },
+        children: [{
+          data: {
+            text: 'Media Parent',
+            _uploadId: 'upload-gif',
+            _mediaType: 'image',
+            _imageSize: { width: 64, height: 48, custom: true },
+            _tencentMeta: { id: 'media-parent' }
+          },
+          children: [
+            { data: { text: 'Child 1', _tencentMeta: { id: 'child1' } }, children: [] },
+            { data: { text: 'Child 2', _tencentMeta: { id: 'child2' } }, children: [] }
+          ]
+        }]
+      }
+
+      const result = simpleMindMapToTencent(smmData, null)
+      const parent = result.rootTopic.children.attached[0]
+
+      expect(parent.extensions['drawwork.media']).toEqual({
+        uploadId: 'upload-gif',
+        mediaType: 'image',
+        imageSize: { width: 64, height: 48, custom: true }
+      })
+      expect(parent.children.attached.map(child => child.id)).toEqual(['child1', 'child2'])
+    })
+
+    it('should preserve outer-frame child subtrees while reconstructing boundaries', () => {
+      const frame = { groupId: 'frame1', strokeColor: '#0984e3' }
+      const smmData = {
+        data: { text: 'Root', _tencentMeta: { id: 'root' } },
+        children: [
+          {
+            data: { text: 'Frame Parent 1', outerFrame: frame, _tencentMeta: { id: 'parent1' } },
+            children: [{ data: { text: 'Nested 1', _tencentMeta: { id: 'nested1' } }, children: [] }]
+          },
+          {
+            data: { text: 'Frame Parent 2', outerFrame: frame, _tencentMeta: { id: 'parent2' } },
+            children: [{ data: { text: 'Nested 2', _tencentMeta: { id: 'nested2' } }, children: [] }]
+          }
+        ]
+      }
+
+      const result = simpleMindMapToTencent(smmData, null)
+
+      expect(result.rootTopic.boundaries[0].range).toEqual([0, 1])
+      expect(result.rootTopic.children.attached[0].children.attached.map(child => child.id)).toEqual(['nested1'])
+      expect(result.rootTopic.children.attached[1].children.attached.map(child => child.id)).toEqual(['nested2'])
+    })
+
+    it('should preserve node structure while keeping relationships from original data', () => {
+      const smmData = {
+        data: { text: 'Root', _tencentMeta: { id: 'root' } },
+        children: [
+          {
+            data: { text: 'Source', _tencentMeta: { id: 'source' } },
+            children: [{ data: { text: 'Source Child', _tencentMeta: { id: 'source-child' } }, children: [] }]
+          },
+          {
+            data: { text: 'Target', _tencentMeta: { id: 'target' } },
+            children: [{ data: { text: 'Target Child', _tencentMeta: { id: 'target-child' } }, children: [] }]
+          }
+        ]
+      }
+      const origTencentData = {
+        relationships: [{ id: 'rel1', end1Id: 'source', end2Id: 'target', title: 'Related' }]
+      }
+
+      const result = simpleMindMapToTencent(smmData, origTencentData)
+
+      expect(result.relationships).toEqual(origTencentData.relationships)
+      expect(result.rootTopic.children.attached[0].children.attached.map(child => child.id)).toEqual(['source-child'])
+      expect(result.rootTopic.children.attached[1].children.attached.map(child => child.id)).toEqual(['target-child'])
     })
 
     it('should remove stale generalization extension when the summary is removed', () => {

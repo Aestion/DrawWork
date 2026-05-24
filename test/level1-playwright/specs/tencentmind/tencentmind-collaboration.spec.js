@@ -126,6 +126,18 @@ async function uploadTinyPng(api, boardId, token) {
   return file.id
 }
 
+async function uploadMedia(api, boardId, token, { name, mimeType, buffer }) {
+  const uploadRes = await api.post(`${API_BASE}/upload?board_id=${boardId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    multipart: {
+      file: { name, mimeType, buffer }
+    }
+  })
+  expect(uploadRes.ok()).toBeTruthy()
+  const file = await uploadRes.json()
+  return file.id
+}
+
 function hasAdvancedFeatures(data, summaryText) {
   const children = data?.rootTopic?.children?.attached || []
   const first = children[0]
@@ -150,6 +162,26 @@ async function renameRootChildFromPage(page, childIndex, nodeName) {
     child.setText(name)
     mm.emit('data_change')
   }, { childIndex, name: nodeName })
+}
+
+async function setRootChildMediaFromPage(page, childIndex, media) {
+  await page.evaluate(({ childIndex, media }) => {
+    const mm = window.__mm
+    if (!mm) throw new Error('mind map not found')
+    const child = mm.renderer.renderTree?.children?.[childIndex]?._node || mm.renderer.renderTree?.children?.[childIndex]
+    if (!child) throw new Error(`root child ${childIndex} not found`)
+    const imageSize = media.imageSize || { width: 32, height: 32, custom: true }
+    mm.execCommand('SET_NODE_DATA', child, {
+      _uploadId: media.uploadId,
+      _mediaType: media.mediaType,
+      _imageSize: imageSize,
+      imageSize
+    })
+    child.setData?.('_uploadId', media.uploadId)
+    child.setData?.('_mediaType', media.mediaType)
+    child.setData?.('_imageSize', imageSize)
+    mm.emit('data_change')
+  }, { childIndex, media })
 }
 
 test.describe('TencentMind Collaboration', () => {
@@ -465,5 +497,62 @@ test.describe('TencentMind Collaboration', () => {
       const state = await getLineAndMediaState(pageB)
       return state?.renderedImages || 0
     }, { timeout: 20000 }).toBeGreaterThan(0)
+  })
+
+  test('gif media syncs immediately before a later video edit', async ({ request: api }) => {
+    await pageA.waitForTimeout(4500)
+    const gifBuffer = Buffer.from([
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00,
+      0x01, 0x00, 0x80, 0x00, 0x00, 0xff, 0x00, 0xff,
+      0x00, 0x00, 0x00, 0x21, 0xf9, 0x04, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44,
+      0x01, 0x00, 0x3b
+    ])
+    const videoBuffer = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32])
+    const gifId = await uploadMedia(api, env.board.id, env.token, {
+      name: 'tiny.gif',
+      mimeType: 'image/gif',
+      buffer: gifBuffer
+    })
+    const videoId = await uploadMedia(api, env.board.id, env.token, {
+      name: 'tiny.mp4',
+      mimeType: 'video/mp4',
+      buffer: videoBuffer
+    })
+
+    await setRootChildMediaFromPage(pageA, 0, {
+      uploadId: gifId,
+      mediaType: 'image',
+      imageSize: { width: 32, height: 32, custom: true }
+    })
+
+    await expect.poll(() => getLineAndMediaState(pageB), { timeout: 20000 }).toMatchObject({
+      mediaUploadId: gifId,
+      mediaType: 'image'
+    })
+
+    await setRootChildMediaFromPage(pageA, 1, {
+      uploadId: videoId,
+      mediaType: 'video',
+      imageSize: { width: 120, height: 80, custom: true }
+    })
+
+    await expect.poll(() => pageB.evaluate(() => {
+      const mm = window.__mm
+      const root = mm?.renderer?.renderTree
+      const media = []
+      const walk = (node) => {
+        const realNode = node?._node || node
+        const data = realNode?.nodeData?.data || realNode?.data || {}
+        if (data._uploadId) media.push({ uploadId: data._uploadId, mediaType: data._mediaType })
+        ;(node?.children || []).forEach(walk)
+      }
+      if (root) walk(root)
+      return media
+    }), { timeout: 20000 }).toEqual(expect.arrayContaining([
+      expect.objectContaining({ uploadId: gifId, mediaType: 'image' }),
+      expect.objectContaining({ uploadId: videoId, mediaType: 'video' })
+    ]))
   })
 })

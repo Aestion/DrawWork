@@ -25,8 +25,11 @@ export function elementsToYjs(elements) {
   return elements.map(el => ({
     id: el.id,
     type: el.type,
-    title: el.title,
+    text: el.text ?? el.title,
     laneId: el.laneId,
+    targetId: el.targetId,
+    x: el.x,
+    y: el.y,
     order: el.order,
     createdAt: el.createdAt || Date.now()
   }))
@@ -37,23 +40,31 @@ export function yjsToElements(yjsElements) {
   return (yjsElements || []).map(e => ({
     id: e.id,
     type: e.type,
-    title: e.title,
+    text: e.text ?? e.title,
     laneId: e.laneId,
+    targetId: e.targetId,
+    x: e.x,
+    y: e.y,
     order: e.order,
     createdAt: e.createdAt
   }))
 }
 
-// Extract swimlane data from per-element Y.Map keys
-// Falls back to old monolithic keys for backward compatibility
-function extractSwimlaneData(yMap) {
+function isDeletedRecord(record) {
+  return record?.__deleted === true
+}
+
+// Extract swimlane data from per-element Y.Map keys.
+// Tombstone records represent explicit deletes and are filtered from UI state.
+// Falls back to old monolithic keys for backward compatibility.
+export function extractSwimlaneData(yMap) {
   const json = yMap.toJSON()
   const lanes = []
   const elements = []
 
   for (const key of Object.keys(json)) {
-    if (key.startsWith('__sl_lane_')) lanes.push(json[key])
-    if (key.startsWith('__sl_elem_')) elements.push(json[key])
+    if (key.startsWith('__sl_lane_') && !isDeletedRecord(json[key])) lanes.push(json[key])
+    if (key.startsWith('__sl_elem_') && !isDeletedRecord(json[key])) elements.push(json[key])
   }
 
   // Backward compat: old format stored monolithic arrays
@@ -71,6 +82,25 @@ function extractSwimlaneData(yMap) {
   }
 }
 
+export function writeSwimlaneDataToYjs(yMap, { direction, lanes, elements }, { deletedLaneIds = [], deletedElementIds = [] } = {}) {
+  const now = Date.now()
+  yMap.set('__sl_direction', direction || 'horizontal')
+
+  for (const lane of lanesToYjs(lanes || [])) {
+    yMap.set('__sl_lane_' + lane.id, lane)
+  }
+  for (const laneId of deletedLaneIds) {
+    yMap.set('__sl_lane_' + laneId, { id: laneId, __deleted: true, deletedAt: now })
+  }
+
+  for (const el of elementsToYjs(elements || [])) {
+    yMap.set('__sl_elem_' + el.id, el)
+  }
+  for (const elementId of deletedElementIds) {
+    yMap.set('__sl_elem_' + elementId, { id: elementId, __deleted: true, deletedAt: now })
+  }
+}
+
 export function useSwimlaneYjs({ canvasId, roomId, token, canEdit }) {
   const [direction, setDirection] = useState('horizontal')
   const [lanes, setLanes] = useState([])
@@ -82,6 +112,8 @@ export function useSwimlaneYjs({ canvasId, roomId, token, canEdit }) {
   const debounceRef = useRef(null)
   const initialDataLoaded = useRef(false)
   const isApplyingRemoteUpdate = useRef(false)
+  const deletedLaneIdsRef = useRef(new Set())
+  const deletedElementIdsRef = useRef(new Set())
 
   const {
     connected,
@@ -121,40 +153,16 @@ export function useSwimlaneYjs({ canvasId, roomId, token, canEdit }) {
     debounceRef.current = setTimeout(() => {
       try {
         yMap.doc.transact(() => {
-          // Store direction as simple key (scalar, no conflict issues)
-          yMap.set('__sl_direction', directionRef.current)
-
-          // Write lanes individually for CRDT merge
-          const currentLanes = lanesToYjs(lanesRef.current)
-          const laneIds = new Set()
-          for (const lane of currentLanes) {
-            laneIds.add(lane.id)
-            yMap.set('__sl_lane_' + lane.id, lane)
-          }
-          // Remove deleted lanes
-          const laneKeysToDelete = []
-          yMap.forEach((value, key) => {
-            if (key.startsWith('__sl_lane_') && !laneIds.has(key.slice(10))) {
-              laneKeysToDelete.push(key)
+          writeSwimlaneDataToYjs(
+            yMap,
+            { direction: directionRef.current, lanes: lanesRef.current, elements: elementsRef.current },
+            {
+              deletedLaneIds: [...deletedLaneIdsRef.current],
+              deletedElementIds: [...deletedElementIdsRef.current]
             }
-          })
-          for (const key of laneKeysToDelete) yMap.delete(key)
-
-          // Write elements individually
-          const currentElements = elementsToYjs(elementsRef.current)
-          const elemIds = new Set()
-          for (const el of currentElements) {
-            elemIds.add(el.id)
-            yMap.set('__sl_elem_' + el.id, el)
-          }
-          // Remove deleted elements
-          const elemKeysToDelete = []
-          yMap.forEach((value, key) => {
-            if (key.startsWith('__sl_elem_') && !elemIds.has(key.slice(10))) {
-              elemKeysToDelete.push(key)
-            }
-          })
-          for (const key of elemKeysToDelete) yMap.delete(key)
+          )
+          deletedLaneIdsRef.current.clear()
+          deletedElementIdsRef.current.clear()
         }, 'local-swimlane-change')
       } catch (err) {
         console.error('[useSwimlaneYjs] Failed to sync to Yjs:', err)
@@ -345,8 +353,6 @@ export function useSwimlaneYjs({ canvasId, roomId, token, canEdit }) {
 
   // Wrapped setDirection - updates local state and syncs to Yjs
   const updateDirection = useCallback((updater) => {
-    if (isApplyingRemoteUpdate.current) return
-
     setDirection(prev => {
       const newDirection = typeof updater === 'function' ? updater(prev) : updater
       directionRef.current = newDirection
@@ -357,10 +363,12 @@ export function useSwimlaneYjs({ canvasId, roomId, token, canEdit }) {
 
   // Wrapped setLanes - updates local state and syncs to Yjs
   const updateLanes = useCallback((updater) => {
-    if (isApplyingRemoteUpdate.current) return
-
     setLanes(prev => {
       const newLanes = typeof updater === 'function' ? updater(prev) : updater
+      const nextIds = new Set(newLanes.map((lane) => lane.id))
+      prev.forEach((lane) => {
+        if (!nextIds.has(lane.id)) deletedLaneIdsRef.current.add(lane.id)
+      })
       lanesRef.current = newLanes
       syncToYjs()
       return newLanes
@@ -369,10 +377,12 @@ export function useSwimlaneYjs({ canvasId, roomId, token, canEdit }) {
 
   // Wrapped setElements - updates local state and syncs to Yjs
   const updateElements = useCallback((updater) => {
-    if (isApplyingRemoteUpdate.current) return
-
     setElements(prev => {
       const newElements = typeof updater === 'function' ? updater(prev) : updater
+      const nextIds = new Set(newElements.map((el) => el.id))
+      prev.forEach((el) => {
+        if (!nextIds.has(el.id)) deletedElementIdsRef.current.add(el.id)
+      })
       elementsRef.current = newElements
       syncToYjs()
       return newElements
@@ -381,7 +391,14 @@ export function useSwimlaneYjs({ canvasId, roomId, token, canEdit }) {
 
   // Combined setter — sets all state with a single sync
   const setAll = useCallback((newDirection, newLanes, newElements) => {
-    if (isApplyingRemoteUpdate.current) return
+    const nextLaneIds = new Set(newLanes.map((lane) => lane.id))
+    lanesRef.current.forEach((lane) => {
+      if (!nextLaneIds.has(lane.id)) deletedLaneIdsRef.current.add(lane.id)
+    })
+    const nextElementIds = new Set(newElements.map((el) => el.id))
+    elementsRef.current.forEach((el) => {
+      if (!nextElementIds.has(el.id)) deletedElementIdsRef.current.add(el.id)
+    })
     setDirection(newDirection)
     setLanes(newLanes)
     setElements(newElements)

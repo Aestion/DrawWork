@@ -27,9 +27,16 @@ router.get('/:id', authMiddleware, checkCanvasPermission('viewer'), async (req, 
 router.put('/:id', authMiddleware, checkCanvasPermission('editor'), async (req, res, next) => {
   try {
     const canvas = req.canvas
-    const { name, sort_order } = req.body
+    const { name, sort_order, type } = req.body
     if (name !== undefined) canvas.name = name.trim() || canvas.name
     if (sort_order !== undefined) canvas.sort_order = sort_order
+    if (type !== undefined) {
+      const validTypes = ['excalidraw', 'mindmap', 'jsmind', 'markmap', 'simplemindmap', 'kanban', 'swimlane', 'tencentmind']
+      if (!validTypes.includes(type)) {
+        return res.status(400).json({ error: '无效的画布类型' })
+      }
+      canvas.type = type
+    }
     await canvas.save()
     res.json(canvas)
   } catch (err) {

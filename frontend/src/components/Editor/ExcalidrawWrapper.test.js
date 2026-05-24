@@ -51,6 +51,9 @@ import * as Y from 'yjs'
 import {
   stableSceneSignature,
   filterOversizedEmbeddedFiles,
+  mergeSceneFiles,
+  reconcileSceneElements,
+  withDeletedElementTombstones,
   shouldFadeDeletedElement,
   decodeSnapshotScene,
   sceneFromYMapJson
@@ -332,6 +335,99 @@ describe('filterOversizedEmbeddedFiles', () => {
     const result = filterOversizedEmbeddedFiles(scene, 0)
     expect(result.files.f1).toBeUndefined()
     expect(result.elements).toHaveLength(0)
+  })
+})
+
+describe('mergeSceneFiles', () => {
+  it('keeps existing image files when a later drawing change reports incomplete files', () => {
+    const existingFiles = {
+      catFile: { id: 'catFile', mimeType: 'image/png', dataURL: 'data:image/png;base64,cat' }
+    }
+
+    const result = mergeSceneFiles(existingFiles, {})
+
+    expect(result.catFile).toEqual(existingFiles.catFile)
+  })
+
+  it('lets newer file entries replace older entries with the same id', () => {
+    const result = mergeSceneFiles(
+      { f1: { id: 'f1', dataURL: 'old' } },
+      { f1: { id: 'f1', dataURL: 'new' } }
+    )
+
+    expect(result.f1.dataURL).toBe('new')
+  })
+})
+
+describe('reconcileSceneElements', () => {
+  it('keeps local elements that are absent from a partial remote update', () => {
+    const result = reconcileSceneElements(
+      [{ id: 'cat', type: 'image', version: 1 }],
+      [{ id: 'rect', type: 'rectangle', version: 1 }]
+    )
+
+    expect(result.map((element) => element.id).sort()).toEqual(['cat', 'rect'])
+  })
+
+  it('uses the remote element when it has a newer version', () => {
+    const result = reconcileSceneElements(
+      [{ id: 'rect', type: 'rectangle', x: 0, version: 1, versionNonce: 1 }],
+      [{ id: 'rect', type: 'rectangle', x: 10, version: 2, versionNonce: 2 }]
+    )
+
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'rect', x: 10, version: 2 })
+    ])
+  })
+
+  it('keeps local optimistic edit when versions tie with different nonces', () => {
+    const result = reconcileSceneElements(
+      [{ id: 'rect', type: 'rectangle', x: 10, version: 2, versionNonce: 1 }],
+      [{ id: 'rect', type: 'rectangle', x: 20, version: 2, versionNonce: 2 }]
+    )
+
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'rect', x: 10, versionNonce: 1 })
+    ])
+  })
+
+  it('applies remote deletion when the deleted element has a newer version', () => {
+    const result = reconcileSceneElements(
+      [{ id: 'rect', type: 'rectangle', isDeleted: false, version: 1, versionNonce: 1 }],
+      [{ id: 'rect', type: 'rectangle', isDeleted: true, version: 2, versionNonce: 2 }]
+    )
+
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'rect', isDeleted: true, version: 2 })
+    ])
+  })
+})
+
+describe('withDeletedElementTombstones', () => {
+  it('adds a tombstone when Excalidraw omits a deleted element from onChange', () => {
+    const result = withDeletedElementTombstones(
+      [
+        { id: 'rect', type: 'rectangle', version: 3, isDeleted: false },
+        { id: 'ellipse', type: 'ellipse', version: 1, isDeleted: false }
+      ],
+      [
+        { id: 'ellipse', type: 'ellipse', version: 1, isDeleted: false }
+      ]
+    )
+
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'ellipse', isDeleted: false }),
+      expect.objectContaining({ id: 'rect', isDeleted: true, version: 4 })
+    ])
+  })
+
+  it('does not create tombstones for elements that are already deleted', () => {
+    const result = withDeletedElementTombstones(
+      [{ id: 'rect', type: 'rectangle', version: 2, isDeleted: true }],
+      []
+    )
+
+    expect(result).toEqual([])
   })
 })
 

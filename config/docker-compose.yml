@@ -124,7 +124,7 @@ services:
 
   # Redis 缓存
   redis:
-    image: redis:7
+    image: redis:7-alpine
     container_name: drawwork-redis
     volumes:
       - ../data/redis:/data

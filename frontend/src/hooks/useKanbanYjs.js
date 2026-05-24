@@ -42,16 +42,21 @@ export function yjsToCards(yjsCards) {
   }))
 }
 
-// Extract kanban data from per-element Y.Map keys
-// Falls back to old monolithic keys for backward compatibility
-function extractKanbanData(yMap) {
+function isDeletedRecord(record) {
+  return record?.__deleted === true
+}
+
+// Extract kanban data from per-element Y.Map keys.
+// Tombstone records represent explicit deletes and are filtered from UI state.
+// Falls back to old monolithic keys for backward compatibility.
+export function extractKanbanData(yMap) {
   const json = yMap.toJSON()
   const columns = []
   const cards = []
 
   for (const key of Object.keys(json)) {
-    if (key.startsWith('__col_')) columns.push(json[key])
-    if (key.startsWith('__card_')) cards.push(json[key])
+    if (key.startsWith('__col_') && !isDeletedRecord(json[key])) columns.push(json[key])
+    if (key.startsWith('__card_') && !isDeletedRecord(json[key])) cards.push(json[key])
   }
 
   // Backward compat: old format stored monolithic arrays
@@ -65,6 +70,26 @@ function extractKanbanData(yMap) {
   return { columns, cards }
 }
 
+export function writeKanbanDataToYjs(yMap, { columns, cards }, { deletedColumnIds = [], deletedCardIds = [] } = {}) {
+  const now = Date.now()
+  const currentColumns = columnsToYjs(columns || [])
+  const currentCards = cardsToYjs(cards || [])
+
+  for (const col of currentColumns) {
+    yMap.set('__col_' + col.id, col)
+  }
+  for (const colId of deletedColumnIds) {
+    yMap.set('__col_' + colId, { id: colId, __deleted: true, deletedAt: now })
+  }
+
+  for (const card of currentCards) {
+    yMap.set('__card_' + card.id, card)
+  }
+  for (const cardId of deletedCardIds) {
+    yMap.set('__card_' + cardId, { id: cardId, __deleted: true, deletedAt: now })
+  }
+}
+
 export function useKanbanYjs({ canvasId, roomId, token, canEdit }) {
   const [columns, setColumns] = useState([])
   const [cards, setCards] = useState([])
@@ -75,6 +100,8 @@ export function useKanbanYjs({ canvasId, roomId, token, canEdit }) {
   const debounceRef = useRef(null)
   const initialDataLoaded = useRef(false)
   const isApplyingRemoteUpdate = useRef(false)
+  const deletedColumnIdsRef = useRef(new Set())
+  const deletedCardIdsRef = useRef(new Set())
 
   const {
     connected,
@@ -111,38 +138,16 @@ export function useKanbanYjs({ canvasId, roomId, token, canEdit }) {
     debounceRef.current = setTimeout(() => {
       try {
         yMap.doc.transact(() => {
-          const currentColumns = columnsToYjs(columnsRef.current)
-          const currentCards = cardsToYjs(cardsRef.current)
-
-          // Write columns individually for CRDT merge
-          const columnIds = new Set()
-          for (const col of currentColumns) {
-            columnIds.add(col.id)
-            yMap.set('__col_' + col.id, col)
-          }
-          // Remove deleted columns
-          const colKeysToDelete = []
-          yMap.forEach((value, key) => {
-            if (key.startsWith('__col_') && !columnIds.has(key.slice(6))) {
-              colKeysToDelete.push(key)
+          writeKanbanDataToYjs(
+            yMap,
+            { columns: columnsRef.current, cards: cardsRef.current },
+            {
+              deletedColumnIds: [...deletedColumnIdsRef.current],
+              deletedCardIds: [...deletedCardIdsRef.current]
             }
-          })
-          for (const key of colKeysToDelete) yMap.delete(key)
-
-          // Write cards individually
-          const cardIds = new Set()
-          for (const card of currentCards) {
-            cardIds.add(card.id)
-            yMap.set('__card_' + card.id, card)
-          }
-          // Remove deleted cards
-          const cardKeysToDelete = []
-          yMap.forEach((value, key) => {
-            if (key.startsWith('__card_') && !cardIds.has(key.slice(7))) {
-              cardKeysToDelete.push(key)
-            }
-          })
-          for (const key of cardKeysToDelete) yMap.delete(key)
+          )
+          deletedColumnIdsRef.current.clear()
+          deletedCardIdsRef.current.clear()
         }, 'local-kanban-change')
       } catch (err) {
         console.error('[useKanbanYjs] Failed to sync to Yjs:', err)
@@ -334,10 +339,12 @@ export function useKanbanYjs({ canvasId, roomId, token, canEdit }) {
 
   // Wrapped setColumns - updates local state and syncs to Yjs
   const updateColumns = useCallback((updater) => {
-    if (isApplyingRemoteUpdate.current) return
-
     setColumns(prev => {
       const newColumns = typeof updater === 'function' ? updater(prev) : updater
+      const nextIds = new Set(newColumns.map((col) => col.id))
+      prev.forEach((col) => {
+        if (!nextIds.has(col.id)) deletedColumnIdsRef.current.add(col.id)
+      })
       columnsRef.current = newColumns
       syncToYjs()
       return newColumns
@@ -346,10 +353,12 @@ export function useKanbanYjs({ canvasId, roomId, token, canEdit }) {
 
   // Wrapped setCards - updates local state and syncs to Yjs
   const updateCards = useCallback((updater) => {
-    if (isApplyingRemoteUpdate.current) return
-
     setCards(prev => {
       const newCards = typeof updater === 'function' ? updater(prev) : updater
+      const nextIds = new Set(newCards.map((card) => card.id))
+      prev.forEach((card) => {
+        if (!nextIds.has(card.id)) deletedCardIdsRef.current.add(card.id)
+      })
       cardsRef.current = newCards
       syncToYjs()
       return newCards
@@ -358,7 +367,14 @@ export function useKanbanYjs({ canvasId, roomId, token, canEdit }) {
 
   // Combined setter — sets both columns and cards with a single sync
   const setColumnsAndCards = useCallback((newColumns, newCards) => {
-    if (isApplyingRemoteUpdate.current) return
+    const nextColumnIds = new Set(newColumns.map((col) => col.id))
+    columnsRef.current.forEach((col) => {
+      if (!nextColumnIds.has(col.id)) deletedColumnIdsRef.current.add(col.id)
+    })
+    const nextCardIds = new Set(newCards.map((card) => card.id))
+    cardsRef.current.forEach((card) => {
+      if (!nextCardIds.has(card.id)) deletedCardIdsRef.current.add(card.id)
+    })
     setColumns(newColumns)
     setCards(newCards)
     columnsRef.current = newColumns

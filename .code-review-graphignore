@@ -1,0 +1,26 @@
+# Keep the graph focused on source, tests, and operational config.
+node_modules/**
+dist/**
+build/**
+coverage/**
+logs/**
+backups/**
+data/**
+
+# Embedded skill/plugin collections are useful reference material, not DrawWork app code.
+skills/**
+claude-skills-collection/**
+.superpowers/**
+.claude/worktrees/**
+.codex/**
+.agents/**
+
+# Generated reports and bulky binary assets.
+frontend/playwright-report/**
+test/archive/**
+test/**/test-assets/**
+test/**/*.{png,gif,mp4,webm}
+**/*.tgz
+**/*.db
+**/*.sqlite
+**/package-lock.json

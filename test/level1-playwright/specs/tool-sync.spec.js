@@ -42,8 +42,8 @@ test.describe('Tool Selection Sync', () => {
       const shareLink = await ownerPage.evaluate(() => navigator.clipboard.readText());
       console.log(`Share link: ${shareLink}`);
 
-      // Close share panel
-      await ownerPage.locator('.share-panel-header button').first().click();
+      // Close share panel by pressing Escape (same pattern as laser-pointer spec)
+      await ownerPage.keyboard.press('Escape');
       await ownerPage.waitForTimeout(500);
 
       // Collaborator registers and joins via share link

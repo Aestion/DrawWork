@@ -51,6 +51,264 @@ function comparableTencentMindSnapshot(data) {
   })
 }
 
+export function shouldSkipTencentRemoteApply(remoteSnapshot, {
+  remoteComparableSnapshot = '',
+  lastBroadcastSnapshot = '',
+  lastBroadcastComparableSnapshot = '',
+  lastSavedSnapshot = '',
+  lastSavedComparableSnapshot = '',
+  lastAppliedRemoteSnapshot = '',
+  lastAppliedRemoteComparableSnapshot = ''
+} = {}) {
+  return Boolean(
+    remoteSnapshot &&
+    (
+      remoteSnapshot === lastBroadcastSnapshot ||
+      remoteSnapshot === lastSavedSnapshot ||
+      remoteSnapshot === lastAppliedRemoteSnapshot ||
+      (remoteComparableSnapshot && remoteComparableSnapshot === lastBroadcastComparableSnapshot) ||
+      (remoteComparableSnapshot && remoteComparableSnapshot === lastSavedComparableSnapshot) ||
+      (remoteComparableSnapshot && remoteComparableSnapshot === lastAppliedRemoteComparableSnapshot)
+    )
+  )
+}
+
+export function applyNodeDataPatch(node, patch) {
+  if (!node || !patch) return
+  if (typeof node.setData === 'function') {
+    Object.entries(patch).forEach(([key, value]) => {
+      node.setData(key, value)
+    })
+  }
+  if (node.nodeData?.data) Object.assign(node.nodeData.data, patch)
+  if (node.data) Object.assign(node.data, patch)
+}
+
+function isFinitePoint(point) {
+  return point && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y))
+}
+
+function normalizePoint(point) {
+  return {
+    ...point,
+    x: Number(point?.x) || 0,
+    y: Number(point?.y) || 0
+  }
+}
+
+function computeDefaultControlPointOffsets(startPoint, endPoint) {
+  const sp = normalizePoint(startPoint)
+  const ep = normalizePoint(endPoint)
+  let cx1 = sp.x + (ep.x - sp.x) / 2
+  let cy1 = sp.y
+  let cx2 = cx1
+  let cy2 = ep.y
+  if (Math.abs(sp.x - ep.x) <= 5) {
+    cx1 = sp.x + (ep.y - sp.y) / 2
+    cx2 = cx1
+  }
+  if (Math.abs(sp.y - ep.y) <= 5) {
+    cx1 = sp.x
+    cy1 = sp.y - (ep.x - sp.x) / 2
+    cx2 = ep.x
+    cy2 = cy1
+  }
+  return [
+    { x: cx1 - sp.x, y: cy1 - sp.y },
+    { x: cx2 - ep.x, y: cy2 - ep.y }
+  ]
+}
+
+function normalizeControlOffsetEntry(entry, pointEntry) {
+  if (Array.isArray(entry) && isFinitePoint(entry[0]) && isFinitePoint(entry[1])) {
+    return [normalizePoint(entry[0]), normalizePoint(entry[1])]
+  }
+  return computeDefaultControlPointOffsets(pointEntry?.startPoint, pointEntry?.endPoint)
+}
+
+function isValidLinePointEntry(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+  const hasStart = !entry.startPoint || isFinitePoint(entry.startPoint)
+  const hasEnd = !entry.endPoint || isFinitePoint(entry.endPoint)
+  return hasStart && hasEnd
+}
+
+export function normalizeAssociativeLineDataForNode(node) {
+  if (!node?.getData) return false
+  const targets = node.getData('associativeLineTargets')
+  if (!Array.isArray(targets) || targets.length === 0) return false
+
+  const offsetSource = node.getData('associativeLineTargetControlOffsets')
+  const pointSource = node.getData('associativeLinePoint')
+  const hasOffsetSource = Array.isArray(offsetSource)
+  const hasPointSource = Array.isArray(pointSource)
+  if (!hasOffsetSource && !hasPointSource) return false
+
+  const offsets = Array.isArray(offsetSource) ? offsetSource.slice(0, targets.length) : []
+  const points = Array.isArray(pointSource) ? pointSource.slice(0, targets.length) : []
+  let changed = false
+
+  for (let index = 0; index < targets.length; index += 1) {
+    if (hasPointSource && !isValidLinePointEntry(points[index])) {
+      points[index] = {}
+      changed = true
+    } else if (points[index]?.startPoint || points[index]?.endPoint) {
+      points[index] = {
+        ...points[index],
+        ...(points[index].startPoint ? { startPoint: normalizePoint(points[index].startPoint) } : {}),
+        ...(points[index].endPoint ? { endPoint: normalizePoint(points[index].endPoint) } : {})
+      }
+    }
+
+    if (hasOffsetSource) {
+      const normalizedOffset = normalizeControlOffsetEntry(offsets[index], points[index])
+      const currentOffset = offsets[index]
+      if (
+        !Array.isArray(currentOffset) ||
+        !isFinitePoint(currentOffset[0]) ||
+        !isFinitePoint(currentOffset[1])
+      ) {
+        offsets[index] = normalizedOffset
+        changed = true
+      } else {
+        offsets[index] = normalizedOffset
+      }
+    }
+  }
+
+  if (!changed) return false
+  const patch = {}
+  if (hasOffsetSource) patch.associativeLineTargetControlOffsets = offsets
+  if (hasPointSource || hasOffsetSource) patch.associativeLinePoint = points
+  applyNodeDataPatch(node, patch)
+  return true
+}
+
+function walkMindMapNodes(root, visitor) {
+  const walk = (treeNode) => {
+    if (!treeNode) return
+    visitor(treeNode._node || treeNode)
+    if (Array.isArray(treeNode.children)) {
+      treeNode.children.forEach(walk)
+    }
+  }
+  walk(root)
+}
+
+export function normalizeAssociativeLineDataForMindMap(mindMap) {
+  const root = mindMap?.renderer?.root || mindMap?.renderer?.renderTree
+  if (!root) return false
+  let changed = false
+  walkMindMapNodes(root, node => {
+    if (normalizeAssociativeLineDataForNode(node)) changed = true
+  })
+  return changed
+}
+
+export function canRunAssociativeLineControlDrag(instance) {
+  if (!instance?.isControlPointMousedown) return false
+  if (!Array.isArray(instance.activeLine) || instance.activeLine.length < 5) return false
+  const [, , , node, toNode] = instance.activeLine
+  if (!node || !toNode) return false
+  return true
+}
+
+export function canCompleteAssociativeLineControlDrag(instance) {
+  if (!canRunAssociativeLineControlDrag(instance)) return false
+  const state = instance.controlPointMousemoveState || {}
+  if (!state.pos || !state.startPoint || !state.endPoint) return false
+  if (!Number.isInteger(Number(state.targetIndex)) || Number(state.targetIndex) < 0) return false
+  return true
+}
+
+function resetAssociativeLineControlDrag(instance) {
+  if (typeof instance?.resetControlPoint === 'function') {
+    instance.resetControlPoint()
+    return
+  }
+  if (!instance) return
+  instance.isControlPointMousedown = false
+  instance.mousedownControlPointKey = ''
+  instance.controlPointMousemoveState = {
+    pos: null,
+    startPoint: null,
+    endPoint: null,
+    targetIndex: ''
+  }
+}
+
+function isRecoverableAssociativeLineError(err) {
+  return err instanceof TypeError &&
+    /not iterable|Cannot read properties of null|Cannot read properties of undefined/.test(err.message)
+}
+
+function recoverAssociativeLineControlDrag(instance, err) {
+  resetAssociativeLineControlDrag(instance)
+  try {
+    instance?.renderAllLines?.()
+  } catch (renderErr) {
+    console.warn('[TencentMind] Failed to redraw associative lines after recovering drag state:', renderErr)
+  }
+  if (isRecoverableAssociativeLineError(err)) {
+    console.warn('[TencentMind] Recovered invalid associative line control drag state:', err)
+    return
+  }
+  throw err
+}
+
+export function patchAssociativeLineInstance(instance) {
+  if (!instance || instance.__drawworkControlDragPatch) return false
+  const originalControlPointMousemove = instance.onControlPointMousemove
+  const originalControlPointMouseup = instance.onControlPointMouseup
+  if (typeof originalControlPointMousemove !== 'function' || typeof originalControlPointMouseup !== 'function') {
+    return false
+  }
+
+  const patchedControlPointMousemove = function patchedControlPointMousemove(...args) {
+    if (!canRunAssociativeLineControlDrag(this)) {
+      resetAssociativeLineControlDrag(this)
+      return
+    }
+    normalizeAssociativeLineDataForMindMap(this.mindMap)
+    try {
+      return originalControlPointMousemove.apply(this, args)
+    } catch (err) {
+      return recoverAssociativeLineControlDrag(this, err)
+    }
+  }.bind(instance)
+
+  const patchedControlPointMouseup = function patchedControlPointMouseup(...args) {
+    if (!this.isControlPointMousedown) return originalControlPointMouseup.apply(this, args)
+    if (!canCompleteAssociativeLineControlDrag(this)) {
+      resetAssociativeLineControlDrag(this)
+      return
+    }
+    normalizeAssociativeLineDataForMindMap(this.mindMap)
+    try {
+      return originalControlPointMouseup.apply(this, args)
+    } catch (err) {
+      return recoverAssociativeLineControlDrag(this, err)
+    }
+  }.bind(instance)
+
+  instance.mindMap?.off?.('mouseup', originalControlPointMouseup)
+  instance.onControlPointMousemove = patchedControlPointMousemove
+  instance.onControlPointMouseup = patchedControlPointMouseup
+  instance.mindMap?.on?.('mouseup', instance.onControlPointMouseup)
+  instance.__drawworkControlDragPatch = true
+  return true
+}
+
+export function shouldRestoreTencentMindMediaNode(data, pendingVideoBlobs) {
+  if (!data?._uploadId) return false
+  if (data._mediaType === 'video') {
+    return !String(data.image || '').startsWith('data:image/svg+xml') ||
+      !data.imageSize ||
+      !pendingVideoBlobs?.has?.(data._uploadId)
+  }
+  return !data.image || data.image === VIDEO_PLACEHOLDER || !data.imageSize
+}
+
 // Scan SVG DOM for VIDEO_PLACEHOLDER <image> elements and replace with <foreignObject><video>
 const injectVideoPlaceholders = (containerEl, blobs, apiClient) => {
   const svg = containerEl?.querySelector('svg')
@@ -138,6 +396,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   const lastSavedSnapshotRef = useRef('')
   const lastSavedComparableSnapshotRef = useRef('')
   const lastBroadcastSnapshotRef = useRef('')
+  const lastBroadcastComparableSnapshotRef = useRef('')
   const [contextMenu, setContextMenu] = useState(null)
   const contextNodeRef = useRef(null)
   const markerMenuRef = useRef(null)
@@ -257,6 +516,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         }
       }
     }
+    normalizeAssociativeLineDataForMindMap(mindMap)
     mindMap.associativeLine?.renderAllLines?.()
   }
 
@@ -429,10 +689,16 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
   }
 
   async function restoreNodeMedia(mindMap) {
+    let changed = false
     const walk = async (node) => {
       const realNode = node?._node || node
       const data = realNode?.nodeData?.data || realNode?.data
       if (data?._uploadId) {
+        if (!shouldRestoreTencentMindMediaNode(data, pendingVideoBlobsRef.current)) {
+          if (data._mediaType === 'video') {
+            injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+          }
+        } else {
         const uploadId = data._uploadId
         const mediaType = data._mediaType
         try {
@@ -461,8 +727,10 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             data.image = blobUrl
             data.imageSize = imageSize
           }
+          changed = true
         } catch (err) {
           console.error('Failed to restore media:', err)
+        }
         }
       }
       if (node.children) {
@@ -472,9 +740,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       }
     }
     await walk(mindMap.renderer.renderTree)
-    mindMap.render(() => {
+    if (changed) {
+      mindMap.render(() => {
+        injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+      })
+    } else {
       injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
-    })
+    }
   }
 
   // Initialize simple-mind-map
@@ -575,9 +847,35 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         this.handleVerticalCheck(node, checkList)
       }
 
+      const AssociativeLineClass = AssociativeLineModule.default || AssociativeLineModule
+      if (AssociativeLineClass && !AssociativeLineClass.__drawworkNormalizePatch) {
+        const originalRenderAllLines = AssociativeLineClass.prototype.renderAllLines
+        const originalControlPointMousemove = AssociativeLineClass.prototype.onControlPointMousemove
+        const originalControlPointMouseup = AssociativeLineClass.prototype.onControlPointMouseup
+
+        AssociativeLineClass.prototype.renderAllLines = function patchedRenderAllLines(...args) {
+          normalizeAssociativeLineDataForMindMap(this.mindMap)
+          return originalRenderAllLines.apply(this, args)
+        }
+
+        AssociativeLineClass.prototype.onControlPointMousemove = function patchedControlPointMousemove(...args) {
+          return patchAssociativeLineInstance(this)
+            ? this.onControlPointMousemove(...args)
+            : originalControlPointMousemove.apply(this, args)
+        }
+
+        AssociativeLineClass.prototype.onControlPointMouseup = function patchedControlPointMouseup(...args) {
+          return patchAssociativeLineInstance(this)
+            ? this.onControlPointMouseup(...args)
+            : originalControlPointMouseup.apply(this, args)
+        }
+
+        AssociativeLineClass.__drawworkNormalizePatch = true
+      }
+
       if (!MindMap._tencentPluginsRegistered) {
         MindMap.usePlugin(DragClass)
-        MindMap.usePlugin(AssociativeLineModule.default || AssociativeLineModule)
+        MindMap.usePlugin(AssociativeLineClass)
         MindMap.usePlugin(UnbalancedLayoutPlugin)
         MindMap.usePlugin(OuterFrameModule.default || OuterFrameModule)
         MindMap.usePlugin(RichTextModule.default || RichTextModule)
@@ -599,6 +897,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         iconList: TENCENT_MARKER_ICONS
       })
       mmRef.current = mindMap
+      patchAssociativeLineInstance(mindMap.associativeLine)
       if (typeof window !== 'undefined') window.__mm = mindMap
 
       // Right-click context menu (library emits node_contextmenu on node groups)
@@ -685,14 +984,11 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
         hasPendingLocalSaveRef.current = true
         broadcastCurrentData()
         clearTimeout(saveTimerRef.current)
-        const snapshotCount = remoteUpdateCountRef.current
         saveTimerRef.current = setTimeout(() => {
           if (applyingRemoteUpdateRef.current) return
-          if (!hasPendingLocalSaveRef.current && remoteUpdateCountRef.current !== snapshotCount) {
-            return
-          }
+          if (!hasPendingLocalSaveRef.current) return
           saveDataRef.current?.()
-        }, 2000)
+        }, 800)
       })
 
       // onConnectionChange is handled by a reactive effect below
@@ -726,16 +1022,29 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     if (!yjsTencentData || yjsLoading || !remoteUpdateVersion) return
     if (!mmRef.current || !originDataRef.current) return
     if (lastRemoteAppliedVersionRef.current >= remoteUpdateVersion) return
-    lastRemoteAppliedVersionRef.current = remoteUpdateVersion
-    remoteUpdateCountRef.current++
     try {
       const remoteSnapshot = JSON.stringify(yjsTencentData)
-      if (hasPendingLocalSaveRef.current && remoteSnapshot !== lastBroadcastSnapshotRef.current) {
+      const remoteComparableSnapshot = comparableTencentMindSnapshot(yjsTencentData)
+      if (shouldSkipTencentRemoteApply(remoteSnapshot, {
+        remoteComparableSnapshot,
+        lastBroadcastSnapshot: lastBroadcastSnapshotRef.current,
+        lastBroadcastComparableSnapshot: lastBroadcastComparableSnapshotRef.current,
+        lastSavedSnapshot: lastSavedSnapshotRef.current,
+        lastSavedComparableSnapshot: lastSavedComparableSnapshotRef.current,
+        lastAppliedRemoteSnapshot: lastAppliedRemoteSnapshotRef.current,
+        lastAppliedRemoteComparableSnapshot: lastAppliedRemoteComparableSnapshotRef.current
+      })) {
+        lastRemoteAppliedVersionRef.current = remoteUpdateVersion
         return
       }
+      if (hasPendingLocalSaveRef.current) {
+        return
+      }
+      lastRemoteAppliedVersionRef.current = remoteUpdateVersion
+      remoteUpdateCountRef.current++
       originDataRef.current = yjsTencentData
       lastAppliedRemoteSnapshotRef.current = remoteSnapshot
-      lastAppliedRemoteComparableSnapshotRef.current = comparableTencentMindSnapshot(yjsTencentData)
+      lastAppliedRemoteComparableSnapshotRef.current = remoteComparableSnapshot
       lastSavedSnapshotRef.current = remoteSnapshot
       lastSavedComparableSnapshotRef.current = lastAppliedRemoteComparableSnapshotRef.current
       applyingRemoteUpdateRef.current = true
@@ -919,6 +1228,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       return
     }
     try {
+      normalizeAssociativeLineDataForMindMap(mmRef.current)
       const currentData = buildDataTreeFromNodes()
       if (!currentData) return
       const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
@@ -948,7 +1258,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             const offsets = allOffsets[targetIndex]
             const points = allPoints[targetIndex]
 
-            if (offsets && points) {
+            if (Array.isArray(offsets) && offsets[0] && offsets[1] && points) {
               const sp = points.startPoint || {}
               const ep = points.endPoint || {}
               controlPoints = {
@@ -1009,13 +1319,16 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
 
   const broadcastCurrentData = useCallback(() => {
     if (!originDataRef.current || !mmRef.current) return
+    normalizeAssociativeLineDataForMindMap(mmRef.current)
     const currentData = buildDataTreeFromNodes()
     if (!currentData) return
     const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
     const snapshot = JSON.stringify(tencentData)
+    const comparableSnapshot = comparableTencentMindSnapshot(tencentData)
     if (snapshot === lastBroadcastSnapshotRef.current || snapshot === lastAppliedRemoteSnapshotRef.current) return
     originDataRef.current = tencentData
     lastBroadcastSnapshotRef.current = snapshot
+    lastBroadcastComparableSnapshotRef.current = comparableSnapshot
     syncToYjs(tencentData)
   }, [syncToYjs])
 
@@ -1067,10 +1380,12 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             height: imageSize.height,
             custom: imageSize.custom
           })
-          raw.nodeData.data._uploadId = uploadId
-          raw.nodeData.data._mediaType = 'video'
-          raw.nodeData.data._blobUrl = blobUrl
-          raw.nodeData.data._imageSize = imageSize
+          applyNodeDataPatch(raw, {
+            _uploadId: uploadId,
+            _mediaType: 'video',
+            _blobUrl: blobUrl,
+            _imageSize: imageSize
+          })
         } else {
           const img = new Image()
           img.src = blobUrl
@@ -1089,12 +1404,15 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
             height: imageSize.height,
             custom: imageSize.custom
           })
-          raw.nodeData.data._uploadId = uploadId
-          raw.nodeData.data._mediaType = 'image'
-          raw.nodeData.data._imageSize = imageSize
+          applyNodeDataPatch(raw, {
+            _uploadId: uploadId,
+            _mediaType: 'image',
+            _imageSize: imageSize
+          })
         }
         mmRef.current?.render(() => {
           injectVideoPlaceholders(containerRef.current, pendingVideoBlobsRef.current, api)
+          broadcastCurrentData()
         })
         mmRef.current?.emit('data_change')
       } catch (err) {

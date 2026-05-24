@@ -7,7 +7,7 @@ test.describe('Media Persistence', () => {
   test.use({ actionTimeout: 20000 });
 
   test('uploaded GIF persists after page refresh', async ({ page }) => {
-    await registerAccount(page, { username: 'gifuser', email: 'gif@test.com', password: 'password123' });
+    await registerAccount(page);
     await createBoard(page, 'GIF Test Board');
     await openBoard(page, 'GIF Test Board');
 
@@ -75,7 +75,7 @@ test.describe('Media Persistence', () => {
   });
 
   test('uploaded video persists after page refresh', async ({ page }) => {
-    await registerAccount(page, { username: 'videouser', email: 'video@test.com', password: 'password123' });
+    await registerAccount(page);
     await createBoard(page, 'Video Test Board');
     await openBoard(page, 'Video Test Board');
 

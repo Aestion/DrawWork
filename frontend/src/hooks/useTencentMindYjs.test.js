@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useTencentMindYjs } from './useTencentMindYjs'
+import { cloneTencentDataForYjs, shouldApplyTencentHttpPollSnapshot, useTencentMindYjs } from './useTencentMindYjs'
 
 vi.mock('./useYjs', () => ({
   useYjs: vi.fn(() => ({
@@ -28,6 +28,47 @@ vi.mock('../lib/axios', () => ({
 }))
 
 describe('useTencentMindYjs', () => {
+  it('does not apply HTTP polling snapshots while Yjs is connected and synced', () => {
+    expect(shouldApplyTencentHttpPollSnapshot({
+      connected: true,
+      synced: true,
+      snapshot: JSON.stringify({ rootTopic: { id: 'root', title: 'stale http' } })
+    })).toBe(false)
+  })
+
+  it('applies HTTP polling snapshots only as an offline fallback', () => {
+    expect(shouldApplyTencentHttpPollSnapshot({
+      connected: false,
+      synced: false,
+      snapshot: JSON.stringify({ rootTopic: { id: 'root', title: 'fallback' } })
+    })).toBe(true)
+  })
+
+  it('does not apply HTTP polling snapshots that echo local changes', () => {
+    const snapshot = JSON.stringify({ rootTopic: { id: 'root', title: 'local' } })
+    expect(shouldApplyTencentHttpPollSnapshot({
+      connected: false,
+      synced: false,
+      snapshot,
+      lastLocalSnapshot: snapshot
+    })).toBe(false)
+  })
+
+  it('clones Tencent data before writing it to Yjs', () => {
+    const data = {
+      rootTopic: {
+        id: 'root',
+        children: { attached: [{ id: 'child1', extensions: { 'drawwork.media': { uploadId: 'u1' } } }] }
+      }
+    }
+
+    const cloned = cloneTencentDataForYjs(data)
+
+    expect(cloned).toEqual(data)
+    expect(cloned).not.toBe(data)
+    expect(cloned.rootTopic.children.attached[0]).not.toBe(data.rootTopic.children.attached[0])
+  })
+
   it('returns loading state initially', () => {
     const { result } = renderHook(() => useTencentMindYjs({ canvasId: 'test', roomId: 'room', canEdit: true }))
     expect(result.current.loading).toBe(true)

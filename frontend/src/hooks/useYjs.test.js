@@ -1,6 +1,70 @@
 import { describe, it, expect } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useYjs } from './useYjs'
+import * as Y from 'yjs'
+import { extractData, shouldEmitSyncEvent, writeSceneToYMap, useYjs } from './useYjs'
+
+describe('writeSceneToYMap', () => {
+  it('keeps existing elements when a partial local update writes a new element', () => {
+    const doc = new Y.Doc()
+    const yMap = doc.getMap('excalidraw')
+
+    writeSceneToYMap(yMap, {
+      elements: [
+        { id: 'old-1', type: 'rectangle' },
+        { id: 'old-2', type: 'ellipse' }
+      ],
+      appState: {},
+      files: {}
+    })
+
+    writeSceneToYMap(yMap, {
+      elements: [{ id: 'new-1', type: 'diamond' }],
+      appState: {},
+      files: {}
+    })
+
+    expect(extractData(yMap).elements.map((element) => element.id).sort()).toEqual([
+      'new-1',
+      'old-1',
+      'old-2'
+    ])
+
+    doc.destroy()
+  })
+
+  it('marks existing elements as deleted when an explicit empty scene is written', () => {
+    const doc = new Y.Doc()
+    const yMap = doc.getMap('excalidraw')
+
+    writeSceneToYMap(yMap, {
+      elements: [{ id: 'old-1', type: 'rectangle' }],
+      appState: {},
+      files: {}
+    })
+
+    writeSceneToYMap(yMap, {
+      elements: [],
+      appState: {},
+      files: {}
+    })
+
+    expect(extractData(yMap).elements).toEqual([
+      expect.objectContaining({ id: 'old-1', isDeleted: true, version: 1 })
+    ])
+
+    doc.destroy()
+  })
+})
+
+describe('shouldEmitSyncEvent', () => {
+  it('emits every successful sync event even when last state was already synced', () => {
+    expect(shouldEmitSyncEvent(true, true)).toBe(true)
+  })
+
+  it('deduplicates repeated unsynced events', () => {
+    expect(shouldEmitSyncEvent(false, false)).toBe(false)
+  })
+})
 
 describe('useYjs', () => {
   it('getData returns files when setData saved them', async () => {
@@ -21,7 +85,7 @@ describe('useYjs', () => {
     expect(data.files.f1).toBeDefined()
   })
 
-  it('setData writes whatever data it receives (guard is in handleChange)', async () => {
+  it('setData marks existing elements deleted for an explicit empty scene', async () => {
     const { result } = renderHook(() => useYjs('room2', 'token2'))
 
     await waitFor(() => expect(result.current.connected).toBe(false))
@@ -50,7 +114,8 @@ describe('useYjs', () => {
 
     // setData directly overwrites (guard is in handleChange, not here)
     data = result.current.getData()
-    expect(data.elements).toHaveLength(0)
+    expect(data.elements).toHaveLength(2)
+    expect(data.elements.every((element) => element.isDeleted)).toBe(true)
     expect(data.appState.theme).toBe('dark')
   })
 

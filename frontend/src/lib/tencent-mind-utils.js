@@ -294,8 +294,6 @@ function convertBack(smmNode, origMeta) {
   const generalization = smmNode.data?.generalization
   let children = []
   if (smmNode.children) {
-    const numGen = generalization ? generalization.length : 0
-    const regularCount = smmNode.children.length - numGen
     const boundaryMap = {}
 
     smmNode.children.forEach((c, i) => {
@@ -311,11 +309,18 @@ function convertBack(smmNode, origMeta) {
         }
       }
 
-      if (i < regularCount) {
+      const childData = c.data || {}
+      const isGeneralizationChild = Boolean(
+        childData.isGeneralization ||
+        childData.generalizationNode ||
+        childData._generalization ||
+        childData._tencentMeta?.isGeneralization
+      )
+
+      if (!isGeneralizationChild) {
         const childMeta = c.data?._tencentMeta || (origMeta?.children?.[i])
         children.push(convertBack(c, childMeta))
       }
-      // generalization children (i >= regularCount) are skipped
     })
 
     // Reconstruct boundaries from current outerFrame data, not stale _tencentMeta

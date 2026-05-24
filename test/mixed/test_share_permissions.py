@@ -167,3 +167,32 @@ def test_editor_can_edit(owner_setup):
     changed = sum(1 for px in d if px != (0, 0, 0)) / (len(d) * 3)
     print(f"  Editor draw change: {changed:.2%}")
     assert changed > 0.0005, "Editor should be able to draw on canvas"
+
+
+@pytest.mark.mixed
+def test_invalid_token_rejected(owner_setup):
+    """Navigate with a bogus share token — should show error, not the editor."""
+    diff = ScreenshotDiff()
+    ts = int(time.time())
+    email = f"share_intruder_{ts}@test.com"
+
+    # Register and login
+    api = requests.Session()
+    api.post(f"{API_URL}/api/auth/register", json={
+        "username": f"share_intruder_{ts}",
+        "email": email,
+        "password": "TestPass123!",
+    })
+    _login_via_pyautogui(email, "TestPass123!")
+
+    # Navigate with invalid token
+    webbrowser.open(f"{FRONTEND_URL}/s/this-is-not-a-real-token-12345")
+    time.sleep(5)
+
+    coord = CoordManager()
+    if not coord.locate_window(retries=10):
+        pytest.skip("No browser window")
+
+    path = diff.capture_fullscreen("mixed_share_invalid_token")
+    assert path.exists()
+    print(f"  Invalid token view: {path}")

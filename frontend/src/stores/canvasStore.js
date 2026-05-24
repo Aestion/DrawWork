@@ -13,11 +13,13 @@ export const useCanvasStore = create((set, get) => ({
       const res = await api.get(`/boards/${boardId}/canvases`)
       const current = get().currentCanvas
       const savedId = localStorage.getItem(`lastCanvas:${boardId}`)
-      const nextCurrent = res.data.find(canvas => canvas.id === current?.id)
-        || res.data.find(canvas => canvas.id === savedId)
-        || res.data[0]
-        || null
-      if (nextCurrent) {
+      const matched = res.data.find(c => c.id === current?.id)
+      // Preserve currentCanvas reference when the active canvas still exists
+      // (prevents unnecessary prop changes during polling that could disrupt editing)
+      const nextCurrent = matched
+        ? current
+        : res.data.find(c => c.id === savedId) || res.data[0] || null
+      if (nextCurrent && nextCurrent.id !== current?.id) {
         localStorage.setItem(`lastCanvas:${boardId}`, nextCurrent.id)
       }
       set({ canvases: res.data, currentCanvas: nextCurrent, isLoading: false })

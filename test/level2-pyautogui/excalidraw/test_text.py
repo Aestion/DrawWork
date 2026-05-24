@@ -13,6 +13,15 @@ from shared.screenshot_diff import ScreenshotDiff
 ts = int(time.time())
 
 
+def _canvas_region(coord: CoordManager):
+    """Get the Excalidraw canvas region in screen coordinates."""
+    x1, y1 = coord.screen_xy(*coord.canvas_top_left)
+    w, h = coord.window_size
+    x2 = x1 + w - coord.rel_x(coord.LAYOUT["canvas_left_ratio"]) - coord.LAYOUT["canvas_right_padding"]
+    y2 = y1 + h - coord.rel_y(coord.LAYOUT["canvas_top_ratio"]) - coord.LAYOUT["canvas_bottom_padding"]
+    return x1, y1, x2, y2
+
+
 @pytest.fixture
 def editor(coord, services):
     api = requests.Session()
@@ -41,7 +50,7 @@ def test_text_english_input(editor):
     coord = editor
     diff = ScreenshotDiff()
 
-    before = diff.capture_fullscreen("l2_text_en_before")
+    before = diff.capture_region("l2_text_en_before", *_canvas_region(coord))
 
     # Select text tool — in Excalidraw it's typically 'T'
     pyautogui.press("t")
@@ -60,13 +69,14 @@ def test_text_english_input(editor):
     pyautogui.click(cx + 100, cy + 50)
     time.sleep(0.5)
 
-    after = diff.capture_fullscreen("l2_text_en_after")
+    after = diff.capture_region("l2_text_en_after", *_canvas_region(coord))
 
     from PIL import Image, ImageChops
     diff_data = ImageChops.difference(Image.open(before), Image.open(after)).getdata()
     changed = sum(1 for px in diff_data if px != (0, 0, 0))
-    print(f"  Text draw change: {changed / (len(diff_data) * 3):.2%}")
-    assert changed / (len(diff_data) * 3) > 0.0005, "Canvas should change after adding text"
+    change_pct = changed / (len(diff_data) * 3)
+    print(f"  Text draw change: {change_pct:.2%}")
+    assert change_pct > 0.0005, f"Canvas should change after adding text, got {change_pct:.2%}"
 
 
 @pytest.mark.level2
@@ -75,7 +85,7 @@ def test_text_chinese_input(editor):
     coord = editor
     diff = ScreenshotDiff()
 
-    before = diff.capture_fullscreen("l2_text_zh_before")
+    before = diff.capture_region("l2_text_zh_before", *_canvas_region(coord))
 
     pyautogui.press("t")
     time.sleep(0.3)
@@ -96,10 +106,11 @@ def test_text_chinese_input(editor):
     pyautogui.click(cx + 150, cy + 70)
     time.sleep(0.5)
 
-    after = diff.capture_fullscreen("l2_text_zh_after")
+    after = diff.capture_region("l2_text_zh_after", *_canvas_region(coord))
 
     from PIL import Image, ImageChops
     diff_data = ImageChops.difference(Image.open(before), Image.open(after)).getdata()
     changed = sum(1 for px in diff_data if px != (0, 0, 0))
-    print(f"  Chinese text change: {changed / (len(diff_data) * 3):.2%}")
-    assert changed / (len(diff_data) * 3) > 0.0005, "Canvas should change after Chinese text"
+    change_pct = changed / (len(diff_data) * 3)
+    print(f"  Chinese text change: {change_pct:.2%}")
+    assert change_pct > 0.0005, f"Canvas should change after Chinese text, got {change_pct:.2%}"

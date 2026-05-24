@@ -4,13 +4,13 @@ FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
 
 COPY frontend/package*.json ./
-RUN npm install
+RUN npm install --registry=https://registry.npmjs.org/
 
 COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Serve with nginx
-FROM nginx:1.25-alpine
+FROM nginx:alpine
 
 RUN apk add --no-cache curl
 
