@@ -226,14 +226,14 @@ describe('edgesToYjs / yjsToEdges', () => {
   it('sets default values for missing fields', () => {
     const yjsEdges = [{ id: 'e1', source: 'n1', target: 'n2' }]
     const result = yjsToEdges(yjsEdges)
-    expect(result[0].type).toBe('smoothstep')
+    expect(result[0].type).toBe('mindmap')
     expect(result[0].label).toBe('')
   })
 
   it('handles edges without type or label gracefully', () => {
     const edges = [{ id: 'e1', source: 'n1', target: 'n2' }]
     const yjsFormat = edgesToYjs(edges)
-    expect(yjsFormat[0].type).toBe('smoothstep')
+    expect(yjsFormat[0].type).toBe('mindmap')
     expect(yjsFormat[0].label).toBe('')
   })
 })

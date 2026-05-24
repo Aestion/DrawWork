@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import * as Y from 'yjs'
-import { extractData, shouldEmitSyncEvent, writeSceneToYMap, useYjs } from './useYjs'
+import {
+  extractData,
+  hasSceneData,
+  shouldEmitCurrentDataOnObserve,
+  shouldEmitSyncEvent,
+  writeSceneToYMap,
+  useYjs
+} from './useYjs'
 
 describe('writeSceneToYMap', () => {
   it('keeps existing elements when a partial local update writes a new element', () => {
@@ -63,6 +70,29 @@ describe('shouldEmitSyncEvent', () => {
 
   it('deduplicates repeated unsynced events', () => {
     expect(shouldEmitSyncEvent(false, false)).toBe(false)
+  })
+})
+
+describe('shouldEmitCurrentDataOnObserve', () => {
+  it('emits a non-empty room snapshot even when provider synced flag is not ready yet', () => {
+    expect(shouldEmitCurrentDataOnObserve(false, {
+      elements: [{ id: 'el1', type: 'rectangle' }],
+      appState: {},
+      files: {}
+    })).toBe(true)
+  })
+
+  it('does not emit an empty unsynced room snapshot', () => {
+    expect(shouldEmitCurrentDataOnObserve(false, {
+      elements: [],
+      appState: {},
+      files: {}
+    })).toBe(false)
+  })
+
+  it('treats appState-only and file-only snapshots as data', () => {
+    expect(hasSceneData({ elements: [], appState: { theme: 'light' }, files: {} })).toBe(true)
+    expect(hasSceneData({ elements: [], appState: {}, files: { f1: { id: 'f1' } } })).toBe(true)
   })
 })
 

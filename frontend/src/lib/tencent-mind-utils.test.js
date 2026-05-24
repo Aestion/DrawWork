@@ -486,6 +486,48 @@ describe('tencent-mind-utils', () => {
       expect(result.rootTopic.title.children[0].children[0].text).toBe('Edited Root')
       expect(result.rootTopic.children.attached[0].title.children[0].children[0].text).toBe('Edited Child')
     })
+
+    it('should preserve media metadata on multiple sibling nodes', () => {
+      const smmData = {
+        data: { text: 'Root', _tencentMeta: { id: 'root' } },
+        children: [
+          {
+            data: {
+              text: 'Image Child',
+              _uploadId: 'gif-upload',
+              _mediaType: 'image',
+              _imageSize: { width: 32, height: 32, custom: true },
+              _tencentMeta: { id: 'child1' }
+            },
+            children: []
+          },
+          {
+            data: {
+              text: 'Video Child',
+              _uploadId: 'video-upload',
+              _mediaType: 'video',
+              _imageSize: { width: 120, height: 80, custom: true },
+              _tencentMeta: { id: 'child2' }
+            },
+            children: []
+          }
+        ]
+      }
+
+      const result = simpleMindMapToTencent(smmData, null)
+      const [first, second] = result.rootTopic.children.attached
+
+      expect(first.extensions['drawwork.media']).toEqual({
+        uploadId: 'gif-upload',
+        mediaType: 'image',
+        imageSize: { width: 32, height: 32, custom: true }
+      })
+      expect(second.extensions['drawwork.media']).toEqual({
+        uploadId: 'video-upload',
+        mediaType: 'video',
+        imageSize: { width: 120, height: 80, custom: true }
+      })
+    })
   })
 
   describe('round-trip conversion', () => {

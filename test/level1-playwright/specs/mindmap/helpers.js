@@ -1,6 +1,6 @@
 const { request } = require('@playwright/test')
 
-const API_BASE = 'http://localhost:3000/api'
+const API_BASE = process.env.API_BASE || 'http://localhost/api'
 
 // Create a test user, board, and mind map canvas via the API
 async function setupTestEnvironment() {
@@ -79,9 +79,15 @@ async function navigateToMindMap(page, boardId) {
   await page.waitForTimeout(1000)
 }
 
-module.exports = { setupTestEnvironment, setupAuthPage, navigateToMindMap, getNodeByText }
+module.exports = { setupTestEnvironment, setupAuthPage, navigateToMindMap, getNodeByText, API_BASE }
 
 // Get a node by its text content
 async function getNodeByText(page, text) {
-  return page.locator(`.react-flow__node-mindNode:has(span:has-text("${text}"))`)
+  const textNode = page
+    .locator(`text=${text}`)
+    .locator('xpath=ancestor::*[contains(@class, "react-flow__node-mindNode")][1]')
+  const inputNode = page.locator('.react-flow__node-mindNode').filter({
+    has: page.locator(`input[value="${text}"]`)
+  })
+  return textNode.or(inputNode).first()
 }

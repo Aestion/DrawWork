@@ -1,5 +1,5 @@
 const { test, expect, request } = require('@playwright/test')
-const { setupTestEnvironment, setupAuthPage, navigateToMindMap, getNodeByText } = require('./helpers')
+const { setupTestEnvironment, setupAuthPage, navigateToMindMap, getNodeByText, API_BASE } = require('./helpers')
 
 //
 // Bug reproduction rationale:
@@ -30,7 +30,7 @@ test.describe('MindMap Canvas Switching', () => {
 
     // Create an excalidraw canvas via API (so we have something to switch to)
     const ctx = await request.newContext()
-    const createRes = await ctx.post(`http://localhost:3000/api/boards/${env.board.id}/canvases`, {
+    const createRes = await ctx.post(`${API_BASE}/boards/${env.board.id}/canvases`, {
       headers: { Authorization: `Bearer ${env.token}` },
       data: { name: '画布 2', type: 'excalidraw' },
     })
@@ -105,7 +105,7 @@ test.describe('MindMap Canvas Switching', () => {
 
     // Create an excalidraw canvas via API
     const ctx = await request.newContext()
-    const createRes = await ctx.post(`http://localhost:3000/api/boards/${env.board.id}/canvases`, {
+    const createRes = await ctx.post(`${API_BASE}/boards/${env.board.id}/canvases`, {
       headers: { Authorization: `Bearer ${env.token}` },
       data: { name: '画布 2', type: 'excalidraw' },
     })
@@ -175,7 +175,7 @@ test.describe('MindMap Canvas Switching', () => {
 
     // Create an excalidraw canvas via API
     const ctx = await request.newContext()
-    const createRes = await ctx.post(`http://localhost:3000/api/boards/${env.board.id}/canvases`, {
+    const createRes = await ctx.post(`${API_BASE}/boards/${env.board.id}/canvases`, {
       headers: { Authorization: `Bearer ${env.token}` },
       data: { name: '画布 2', type: 'excalidraw' },
     })

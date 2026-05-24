@@ -27,7 +27,7 @@ const MEDIA_FETCH_TIMEOUT_MS = 30_000
 // so this component never receives position props — only identity + src.
 // React.memo prevents re-render when src/mimeType/uploadId are stable.
 const MediaOverlayItem = React.memo(function MediaOverlayItem({
-  elementId, src, mimeType, uploadId, registerRef, unregisterRef
+  elementId, src, mimeType, uploadId, registerRef, unregisterRef, initialStyle
 }) {
   const domRef = useRef(null)
 
@@ -55,10 +55,12 @@ const MediaOverlayItem = React.memo(function MediaOverlayItem({
   // Must be 1x1 to ensure browser loads media (0-size might suppress load).
   const baseStyle = {
     position: 'absolute',
-    left: 0,
-    top: 0,
-    width: '1px',
-    height: '1px',
+    left: initialStyle?.left ?? 0,
+    top: initialStyle?.top ?? 0,
+    width: initialStyle?.width ?? '1px',
+    height: initialStyle?.height ?? '1px',
+    transformOrigin: initialStyle?.transformOrigin ?? 'center center',
+    transform: initialStyle?.transform,
     pointerEvents: 'none',
     contain: 'layout style paint'
   }
@@ -101,6 +103,25 @@ function normalizeZoom(zoom) {
   if (typeof zoom === 'number') return zoom
   if (typeof zoom?.value === 'number') return zoom.value
   return 1
+}
+
+export function mediaOverlayTransformForElement(element) {
+  const scaleX = element?.scale?.[0] ?? 1
+  const scaleY = element?.scale?.[1] ?? 1
+  return {
+    transformOrigin: 'center center',
+    transform: `rotate(${element?.angle || 0}rad) scale(${scaleX}, ${scaleY})`
+  }
+}
+
+export function mediaOverlayInitialStyle(overlay) {
+  return {
+    left: `${overlay.left}px`,
+    top: `${overlay.top}px`,
+    width: `${overlay.width}px`,
+    height: `${overlay.height}px`,
+    ...mediaOverlayTransformForElement(overlay)
+  }
 }
 
 // View state (scrollX, scrollY, zoom) should NOT be synced between users
@@ -607,15 +628,14 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
           const top = topLeft.y - (containerRect?.top ?? 0)
           const width = Math.max(1, Math.abs(bottomRight.x - topLeft.x))
           const height = Math.max(1, Math.abs(bottomRight.y - topLeft.y))
-          const scaleX = element.scale?.[0] ?? 1
-          const scaleY = element.scale?.[1] ?? 1
+          const transformStyle = mediaOverlayTransformForElement(element)
 
           domEl.style.left = `${left}px`
           domEl.style.top = `${top}px`
           domEl.style.width = `${width}px`
           domEl.style.height = `${height}px`
-          domEl.style.transformOrigin = 'top left'
-          domEl.style.transform = `rotate(${element.angle || 0}rad) scale(${scaleX}, ${scaleY})`
+          domEl.style.transformOrigin = transformStyle.transformOrigin
+          domEl.style.transform = transformStyle.transform
         })
       }
 
@@ -1254,7 +1274,9 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
   const handleAPI = useCallback((apiInstance) => {
     excalidrawRef.current = apiInstance
     // Expose for Playwright E2E tests
-    if (process.env.NODE_ENV !== 'production') window.__EXCALIDRAW__ = apiInstance
+    if (process.env.NODE_ENV !== 'production' || ['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+      window.__EXCALIDRAW__ = apiInstance
+    }
 
     const currentScene = sceneRef.current
     if (currentScene.elements.length === 0 && Object.keys(currentScene.files || {}).length === 0) {
@@ -1330,8 +1352,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
         )
         const width = Math.max(1, Math.abs(bottomRight.x - topLeft.x))
         const height = Math.max(1, Math.abs(bottomRight.y - topLeft.y))
-        const scaleX = element.scale?.[0] ?? 1
-        const scaleY = element.scale?.[1] ?? 1
+        const transformStyle = mediaOverlayTransformForElement(element)
 
         // Position relative to container, accounting for canvas offset within container
         return {
@@ -1343,8 +1364,10 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
           width,
           height,
           angle: element.angle || 0,
-          scaleX,
-          scaleY,
+          scaleX: element.scale?.[0] ?? 1,
+          scaleY: element.scale?.[1] ?? 1,
+          transformOrigin: transformStyle.transformOrigin,
+          transform: transformStyle.transform,
         }
       })
       .filter(Boolean)
@@ -1574,6 +1597,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
               uploadId={overlay.uploadId}
               registerRef={registerMediaRef}
               unregisterRef={unregisterMediaRef}
+              initialStyle={mediaOverlayInitialStyle(overlay)}
             />
           )
         })}

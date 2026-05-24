@@ -2263,7 +2263,7 @@ const MindMapEditor = forwardRef(function MindMapEditor({ canvasId, roomId, canE
   }, [])
 
   const onConnect = useCallback(
-    (params) => { captureUndo(); setEdges((eds) => addEdge({ ...params, type: 'smoothstep' }, eds)) },
+    (params) => { captureUndo(); setEdges((eds) => addEdge({ ...params, type: 'mindmap' }, eds)) },
     [setEdges]
   )
 

@@ -224,6 +224,8 @@ test.describe('MindMap Editor', () => {
     for (let i = 0; i < 2; i++) {
       await page.keyboard.press('Control+Enter')
       await page.waitForTimeout(500)
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(100)
     }
 
     // 3 nodes total
@@ -251,8 +253,12 @@ test.describe('MindMap Editor', () => {
     // Create two additional root nodes (total: 3)
     await page.keyboard.press('Control+Enter')
     await page.waitForTimeout(500)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(100)
     await page.keyboard.press('Control+Enter')
     await page.waitForTimeout(500)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(100)
 
     // Select first root, then Shift+click on second
     const rootNodes = page.locator('.react-flow__node-mindNode')

@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test')
-const { setupTestEnvironment, setupAuthPage, navigateToMindMap, getNodeByText } = require('./helpers')
+const { setupTestEnvironment, setupAuthPage, navigateToMindMap, getNodeByText, API_BASE } = require('./helpers')
 
 test.describe('MindMap Collaboration', () => {
   let env
@@ -14,12 +14,12 @@ test.describe('MindMap Collaboration', () => {
     const bEmail = `mmb-${ts}@test.com`
     const bUser = `mmb-${ts}`
 
-    const regRes = await api.post('http://localhost:3000/api/auth/register', {
+    const regRes = await api.post(`${API_BASE}/auth/register`, {
       data: { username: bUser, email: bEmail, password: 'Test123456!' }
     })
     expect(regRes.ok()).toBeTruthy()
 
-    const loginRes = await api.post('http://localhost:3000/api/auth/login', {
+    const loginRes = await api.post(`${API_BASE}/auth/login`, {
       data: { email: bEmail, password: 'Test123456!' }
     })
     expect(loginRes.ok()).toBeTruthy()
@@ -28,7 +28,7 @@ test.describe('MindMap Collaboration', () => {
     const userBId = loginData.user?.id || loginData.user
 
     // Share board with User B
-    const shareRes = await api.post(`http://localhost:3000/api/boards/${env.board.id}/shares`, {
+    const shareRes = await api.post(`${API_BASE}/boards/${env.board.id}/shares`, {
       headers: { Authorization: `Bearer ${env.token}` },
       data: { user_id: userBId, permission: 'editor' }
     })

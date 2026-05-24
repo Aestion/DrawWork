@@ -93,6 +93,39 @@ async function getLineAndMediaState(page) {
   })
 }
 
+async function getAllMediaState(page) {
+  return page.evaluate(() => {
+    const mm = window.__mm
+    const root = mm?.renderer?.renderTree
+    const media = []
+    const walk = (node) => {
+      const realNode = node?._node || node
+      const data = realNode?.nodeData?.data || realNode?.data || {}
+      if (data._uploadId) media.push({ uploadId: data._uploadId, mediaType: data._mediaType })
+      ;(node?.children || []).forEach(walk)
+    }
+    if (root) walk(root)
+    return media
+  })
+}
+
+async function getRootChildDebugState(page) {
+  return page.evaluate(() => {
+    const mm = window.__mm
+    return (mm?.renderer?.renderTree?.children || []).slice(0, 3).map((child, index) => {
+      const realNode = child?._node || child
+      const data = realNode?.nodeData?.data || realNode?.data || {}
+      return {
+        index,
+        text: data.text,
+        uploadId: data._uploadId || '',
+        mediaType: data._mediaType || '',
+        childCount: child?.children?.length || 0
+      }
+    })
+  })
+}
+
 async function hasMindText(page, text) {
   return page.evaluate((expectedText) => {
     if (document.body.innerText.includes(expectedText)) return true
@@ -168,18 +201,27 @@ async function setRootChildMediaFromPage(page, childIndex, media) {
   await page.evaluate(({ childIndex, media }) => {
     const mm = window.__mm
     if (!mm) throw new Error('mind map not found')
+    const container = document.querySelector('.smm-mind-map-container') || document.querySelector('.flex-1.overflow-hidden')
+    container?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
     const child = mm.renderer.renderTree?.children?.[childIndex]?._node || mm.renderer.renderTree?.children?.[childIndex]
     if (!child) throw new Error(`root child ${childIndex} not found`)
+    const realChild = child?._node || child
     const imageSize = media.imageSize || { width: 32, height: 32, custom: true }
-    mm.execCommand('SET_NODE_DATA', child, {
+    const mediaData = {
       _uploadId: media.uploadId,
       _mediaType: media.mediaType,
       _imageSize: imageSize,
       imageSize
-    })
-    child.setData?.('_uploadId', media.uploadId)
-    child.setData?.('_mediaType', media.mediaType)
-    child.setData?.('_imageSize', imageSize)
+    }
+    mm.execCommand('SET_NODE_DATA', realChild, mediaData)
+    for (const node of [child, realChild]) {
+      node.setData?.('_uploadId', media.uploadId)
+      node.setData?.('_mediaType', media.mediaType)
+      node.setData?.('_imageSize', imageSize)
+      node.setData?.('imageSize', imageSize)
+      const targetData = node?.nodeData?.data || node?.data
+      if (targetData) Object.assign(targetData, mediaData)
+    }
     mm.emit('data_change')
   }, { childIndex, media })
 }
@@ -538,19 +580,26 @@ test.describe('TencentMind Collaboration', () => {
       imageSize: { width: 120, height: 80, custom: true }
     })
 
-    await expect.poll(() => pageB.evaluate(() => {
-      const mm = window.__mm
-      const root = mm?.renderer?.renderTree
-      const media = []
+    await expect.poll(() => getAllMediaState(pageA), {
+      timeout: 5000,
+      message: async () => `A media debug: ${JSON.stringify(await getRootChildDebugState(pageA))}`
+    }).toEqual(expect.arrayContaining([
+      expect.objectContaining({ uploadId: gifId, mediaType: 'image' }),
+      expect.objectContaining({ uploadId: videoId, mediaType: 'video' })
+    ]))
+
+    await waitForTencentMindData(api, env.canvas.id, env.token, (data) => {
+      const ids = []
       const walk = (node) => {
-        const realNode = node?._node || node
-        const data = realNode?.nodeData?.data || realNode?.data || {}
-        if (data._uploadId) media.push({ uploadId: data._uploadId, mediaType: data._mediaType })
-        ;(node?.children || []).forEach(walk)
+        const media = node?.extensions?.['drawwork.media']
+        if (media?.uploadId) ids.push(media.uploadId)
+        ;(node?.children?.attached || []).forEach(walk)
       }
-      if (root) walk(root)
-      return media
-    }), { timeout: 20000 }).toEqual(expect.arrayContaining([
+      walk(data?.rootTopic)
+      return ids.includes(gifId) && ids.includes(videoId)
+    }, 10000)
+
+    await expect.poll(() => getAllMediaState(pageB), { timeout: 20000 }).toEqual(expect.arrayContaining([
       expect.objectContaining({ uploadId: gifId, mediaType: 'image' }),
       expect.objectContaining({ uploadId: videoId, mediaType: 'video' })
     ]))

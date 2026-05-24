@@ -81,6 +81,18 @@ export function shouldEmitSyncEvent(lastSync, isSynced) {
   return isSynced === true || lastSync !== isSynced
 }
 
+export function hasSceneData(data) {
+  return Boolean(
+    (Array.isArray(data?.elements) && data.elements.length > 0) ||
+    (data?.files && Object.keys(data.files).length > 0) ||
+    (data?.appState && Object.keys(data.appState).length > 0)
+  )
+}
+
+export function shouldEmitCurrentDataOnObserve(providerSynced, currentData) {
+  return providerSynced === true || hasSceneData(currentData)
+}
+
 function getConnection(roomId, token, type = 'excalidraw') {
   const existing = connections.get(roomId)
   if (existing && existing.type === type) {
@@ -211,6 +223,8 @@ export function useYjs(roomId, token, options = {}) {
       if (conn.provider.synced && !syncedRef.current) {
         syncedRef.current = true
         setSynced(true)
+        const data = extractData(conn.yMap)
+        conn.observers.forEach((cb) => cb(data, { source: 'initial' }))
       }
     }, 100)
 
@@ -349,11 +363,12 @@ export function useYjs(roomId, token, options = {}) {
     conn.observers.add(emit)
     conn.yMap.observe(handler)
 
-    // Emit current state immediately if provider is already synced
-    // (e.g., when switching canvases and reusing an existing connection)
-    if (conn.provider.synced) {
+    // Emit current state immediately if provider is already synced, or if the
+    // Y.Map already contains data before this component registered its observer.
+    const currentData = extractData(conn.yMap)
+    if (shouldEmitCurrentDataOnObserve(conn.provider.synced, currentData)) {
       emit(
-        extractData(conn.yMap),
+        currentData,
         { source: 'initial' }
       )
     }

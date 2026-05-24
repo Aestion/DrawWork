@@ -52,12 +52,48 @@ import {
   stableSceneSignature,
   filterOversizedEmbeddedFiles,
   mergeSceneFiles,
+  mediaOverlayInitialStyle,
+  mediaOverlayTransformForElement,
   reconcileSceneElements,
   withDeletedElementTombstones,
   shouldFadeDeletedElement,
   decodeSnapshotScene,
   sceneFromYMapJson
 } from './ExcalidrawWrapper'
+
+describe('media overlay transform', () => {
+  it('mirrors around the element center so playback stays on top of the image layer', () => {
+    const style = mediaOverlayTransformForElement({
+      angle: 0,
+      scale: [-1, 1]
+    })
+
+    expect(style).toEqual({
+      transformOrigin: 'center center',
+      transform: 'rotate(0rad) scale(-1, 1)'
+    })
+  })
+
+  it('builds a first-paint style with the same center transform used by the RAF loop', () => {
+    const style = mediaOverlayInitialStyle({
+      left: 12,
+      top: 34,
+      width: 120,
+      height: 80,
+      angle: 0.5,
+      scale: [1, -1]
+    })
+
+    expect(style).toMatchObject({
+      left: '12px',
+      top: '34px',
+      width: '120px',
+      height: '80px',
+      transformOrigin: 'center center',
+      transform: 'rotate(0.5rad) scale(1, -1)'
+    })
+  })
+})
 
 describe('stableSceneSignature', () => {
   it('produces same signature for identical data', () => {

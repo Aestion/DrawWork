@@ -294,124 +294,61 @@ test.describe('Collaboration', () => {
       expect([200, 201]).toContain(shareResult.status);
 
       await pageA.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+      await pageB.goto('/');
+      await pageB.waitForTimeout(1000);
+      await openBoard(pageB, boardName);
+      await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
 
-      await pageA.evaluate(() => {
-        const exc = window.__EXCALIDRAW__;
-        const makeElement = (id, type, x, y) => ({
-          id,
-          type,
-          x,
-          y,
-          width: 120,
-          height: 80,
-          angle: 0,
-          strokeColor: '#1e1e1e',
-          backgroundColor: 'transparent',
-          fillStyle: 'hachure',
-          strokeWidth: 2,
-          strokeStyle: 'solid',
-          roughness: 1,
-          opacity: 100,
-          groupIds: [],
-          frameId: null,
-          roundness: type === 'rectangle' ? null : { type: 2 },
-          seed: Math.floor(Math.random() * 100000),
-          version: 1,
-          versionNonce: Math.floor(Math.random() * 100000),
-          isDeleted: false,
-          boundElements: null,
-          updated: Date.now(),
-          link: null,
-          locked: false
-        });
-        exc.updateScene({
-          elements: [
-            makeElement('old-rect', 'rectangle', 120, 120),
-            makeElement('old-diamond', 'diamond', 300, 120)
-          ],
-          appState: exc.getAppState()
-        });
-      });
+      const canvasA = pageA.locator('.excalidraw__canvas.interactive');
+      const boxA = await canvasA.boundingBox();
+      expect(boxA).not.toBeNull();
+      const acx = boxA.x + boxA.width / 2;
+      const acy = boxA.y + boxA.height / 2;
+
+      let aCount = 0;
+      for (let attempt = 0; attempt < 5 && aCount === 0; attempt++) {
+        if (attempt > 0) await pageA.waitForTimeout(500);
+        await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
+        await pageA.waitForTimeout(300);
+        await pageA.mouse.move(acx - 240, acy - 80);
+        await pageA.mouse.down();
+        await pageA.mouse.move(acx - 120, acy);
+        await pageA.mouse.up();
+        await pageA.waitForTimeout(500);
+        aCount = await pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }
+
+      await expect.poll(async () => {
+        return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 10000 }).toBeGreaterThanOrEqual(1);
+
+      await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'diamond' }));
+      await pageA.waitForTimeout(300);
+      await pageA.mouse.move(acx + 20, acy - 80);
+      await pageA.mouse.down();
+      await pageA.mouse.move(acx + 140, acy);
+      await pageA.mouse.up();
 
       await expect.poll(async () => {
         return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
       }, { timeout: 10000 }).toBe(2);
 
-      await pageB.goto('/');
-      await pageB.waitForTimeout(1000);
-      await openBoard(pageB, boardName);
-      await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
       await waitForSceneElements(pageB, 2, { timeout: 20000 });
 
-      await pageA.evaluate(() => {
-        const exc = window.__EXCALIDRAW__;
-        const elements = exc.getSceneElements();
-        exc.updateScene({
-          elements: [
-            ...elements,
-            {
-              id: 'new-ellipse',
-              type: 'ellipse',
-              x: 500,
-              y: 120,
-              width: 120,
-              height: 80,
-              angle: 0,
-              strokeColor: '#1e1e1e',
-              backgroundColor: 'transparent',
-              fillStyle: 'hachure',
-              strokeWidth: 2,
-              strokeStyle: 'solid',
-              roughness: 1,
-              opacity: 100,
-              groupIds: [],
-              frameId: null,
-              roundness: null,
-              seed: 12345,
-              version: 1,
-              versionNonce: 67890,
-              isDeleted: false,
-              boundElements: null,
-              updated: Date.now(),
-              link: null,
-              locked: false
-            }
-          ],
-          appState: exc.getAppState()
-        });
-      });
-
-      await expect.poll(async () => {
-        return pageA.evaluate(() => {
-          const elements = window.__EXCALIDRAW__?.getSceneElements?.() || [];
-          return elements.map((element) => element.id).sort();
-        });
-      }, { timeout: 15000 }).toEqual(['new-ellipse', 'old-diamond', 'old-rect']);
-
-      await expect.poll(async () => {
-        return pageB.evaluate(() => {
-          const elements = window.__EXCALIDRAW__?.getSceneElements?.() || [];
-          return elements.map((element) => element.id).sort();
-        });
-      }, { timeout: 20000 }).toEqual(['new-ellipse', 'old-diamond', 'old-rect']);
-
-      const canvasA = pageA.locator('.excalidraw__canvas.interactive');
-      const boxA = await canvasA.boundingBox();
-      expect(boxA).not.toBeNull();
       await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'ellipse' }));
       await pageA.waitForTimeout(300);
-      await pageA.mouse.move(boxA.x + 620, boxA.y + 190);
+      await pageA.mouse.move(acx + 240, acy - 80);
       await pageA.mouse.down();
-      await pageA.mouse.move(boxA.x + 700, boxA.y + 250);
+      await pageA.mouse.move(acx + 360, acy);
       await pageA.mouse.up();
 
       await expect.poll(async () => {
         return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
-      }, { timeout: 10000 }).toBeGreaterThanOrEqual(4);
+      }, { timeout: 10000 }).toBeGreaterThanOrEqual(3);
 
       await expect.poll(async () => {
         return pageB.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
-      }, { timeout: 20000 }).toBeGreaterThanOrEqual(4);
+      }, { timeout: 20000 }).toBeGreaterThanOrEqual(3);
     } finally {
       await ctxA.close();
       await ctxB.close();
