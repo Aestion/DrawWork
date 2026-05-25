@@ -14,6 +14,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BLOB,
       allowNull: false
     },
+    name: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     created_by: {
       type: DataTypes.UUID,
       references: { model: 'users', key: 'id' }
