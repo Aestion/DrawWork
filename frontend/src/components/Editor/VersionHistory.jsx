@@ -120,20 +120,21 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
   const latestId = snapshots.length > 0 ? snapshots[0].id : null
 
   return (
-    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" role="dialog" aria-modal="true" onKeyDown={e => e.key === 'Escape' && onClose?.()} onClick={onClose} tabIndex={-1}>
       <div className="bg-white rounded-xl shadow-2xl w-[420px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <h2 className="text-base font-semibold text-gray-800">版本历史</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+          <button aria-label="关闭" onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
         </div>
 
         {/* Naming input (shown when saving) */}
         {showNaming && (
           <div className="px-5 pt-3 pb-2 border-b">
-            <label className="text-xs text-gray-500 mb-1 block">为当前版本命名：</label>
+            <label htmlFor="version-name" className="text-xs text-gray-500 mb-1 block">为当前版本命名：</label>
             <div className="flex gap-2">
               <input
+                id="version-name"
                 ref={inputRef}
                 type="text"
                 value={versionName}
@@ -213,7 +214,7 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
                           ) : s.created_by?.username ? (
                             <span>{s.created_by.username}</span>
                           ) : null}
-                          <span>{!s.name && isAuto ? '' : formatTime(s.created_at)}</span>
+                          <span>{formatTime(s.created_at)}</span>
                         </div>
                       </div>
 
@@ -236,7 +237,7 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
                     </div>
 
                     {/* Delete button (manual saves only, appears on hover) */}
-                    {!isAuto && onDelete && (
+                    {!isAuto && (
                       <div className="mt-2 pt-2 border-t border-gray-100 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => handleDelete(s.id)}
