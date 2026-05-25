@@ -235,4 +235,106 @@ describe('Snapshots API', () => {
       .send({ data: Buffer.from('should-fail').toString('base64') })
     expect(createRes.status).toBe(403)
   })
+
+  // ============================================================
+  // Delete snapshot endpoint tests
+  // ============================================================
+  it('DELETE snapshot removes it and returns 200', async () => {
+    const boardRes = await request(app)
+      .post('/api/boards')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: 'Delete Snap Board' })
+    const canvas = boardRes.body.canvases[0]
+
+    const createRes = await request(app)
+      .post(`/api/canvases/${canvas.id}/snapshot`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ data: Buffer.from('delete-me').toString('base64') })
+    expect(createRes.status).toBe(201)
+
+    const delRes = await request(app)
+      .delete(`/api/canvases/${canvas.id}/snapshots/${createRes.body.id}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+    expect(delRes.status).toBe(200)
+
+    const getRes = await request(app)
+      .get(`/api/canvases/${canvas.id}/snapshots/${createRes.body.id}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+    expect(getRes.status).toBe(404)
+  })
+
+  it('DELETE snapshot by non-editor returns 403', async () => {
+    const boardRes = await request(app)
+      .post('/api/boards')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: 'Delete Perm Board' })
+    const canvas = boardRes.body.canvases[0]
+
+    const createRes = await request(app)
+      .post(`/api/canvases/${canvas.id}/snapshot`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ data: Buffer.from('perm-test').toString('base64') })
+
+    const { BoardShare } = require('../models')
+    await BoardShare.create({
+      board_id: boardRes.body.id,
+      user_id: viewer.id,
+      permission: 'viewer'
+    })
+
+    const delRes = await request(app)
+      .delete(`/api/canvases/${canvas.id}/snapshots/${createRes.body.id}`)
+      .set('Authorization', `Bearer ${viewerToken}`)
+    expect(delRes.status).toBe(403)
+  })
+
+  it('DELETE non-existent snapshot returns 404', async () => {
+    const delRes = await request(app)
+      .delete(`/api/canvases/${testCanvas.id}/snapshots/00000000-0000-0000-0000-000000000000`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+    expect(delRes.status).toBe(404)
+  })
+
+  it('POST snapshot accepts optional name and returns it in list', async () => {
+    const boardRes = await request(app)
+      .post('/api/boards')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: 'Name Snap Board' })
+    const canvas = boardRes.body.canvases[0]
+
+    const createRes = await request(app)
+      .post(`/api/canvases/${canvas.id}/snapshot`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        data: Buffer.from('named-snap').toString('base64'),
+        name: '初稿完成'
+      })
+    expect(createRes.status).toBe(201)
+
+    const listRes = await request(app)
+      .get(`/api/canvases/${canvas.id}/snapshots`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+    expect(listRes.status).toBe(200)
+    expect(listRes.body[0]).toHaveProperty('name')
+    expect(listRes.body[0].name).toBe('初稿完成')
+  })
+
+  it('POST snapshot without name sets name to null', async () => {
+    const boardRes = await request(app)
+      .post('/api/boards')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ name: 'No Name Board' })
+    const canvas = boardRes.body.canvases[0]
+
+    const createRes = await request(app)
+      .post(`/api/canvases/${canvas.id}/snapshot`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ data: Buffer.from('noname').toString('base64') })
+    expect(createRes.status).toBe(201)
+
+    const listRes = await request(app)
+      .get(`/api/canvases/${canvas.id}/snapshots`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+    expect(listRes.body[0].name).toBeNull()
+  })
 })

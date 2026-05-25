@@ -34,7 +34,7 @@ router.get('/:id/snapshot', authMiddleware, checkCanvasPermission('viewer'), asy
 router.post('/:id/snapshot', authMiddleware, checkCanvasPermission('editor'), async (req, res, next) => {
   try {
     const canvasId = req.params.id
-    const { data } = req.body
+    const { data, name } = req.body
 
     if (!data) {
       return res.status(400).json({ error: '缺少数据' })
@@ -46,10 +46,27 @@ router.post('/:id/snapshot', authMiddleware, checkCanvasPermission('editor'), as
     const snapshot = await YjsSnapshot.create({
       canvas_id: canvasId,
       content: Buffer.from(data, 'base64'),
-      created_by: req.user.id
+      created_by: req.user.id,
+      name: typeof name === 'string' && name.trim().length > 0 ? name.trim().substring(0, 255) : null
     })
 
-    res.status(201).json({ id: snapshot.id, created_at: serializeCreatedAt(snapshot) })
+    res.status(201).json({ id: snapshot.id, name: snapshot.name || null, created_at: serializeCreatedAt(snapshot) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// DELETE /api/canvases/:id/snapshots/:snapshotId — 删除快照
+router.delete('/:id/snapshots/:snapshotId', authMiddleware, checkCanvasPermission('editor'), async (req, res, next) => {
+  try {
+    const snapshot = await YjsSnapshot.findOne({
+      where: { id: req.params.snapshotId, canvas_id: req.params.id }
+    })
+    if (!snapshot) {
+      return res.status(404).json({ error: '快照不存在' })
+    }
+    await snapshot.destroy()
+    res.json({ message: '快照已删除' })
   } catch (err) {
     next(err)
   }
@@ -61,13 +78,14 @@ router.get('/:id/snapshots', authMiddleware, checkCanvasPermission('viewer'), as
     const canvasId = req.params.id
     const snapshots = await YjsSnapshot.findAll({
       where: { canvas_id: canvasId },
-      attributes: ['id', 'createdAt', 'created_by'],
+      attributes: ['id', 'createdAt', 'name', 'created_by'],
       include: [{ model: User, attributes: ['id', 'username'] }],
       order: [['created_at', 'DESC']]
     })
 
     const result = snapshots.map(s => ({
       id: s.id,
+      name: s.name || null,
       created_at: serializeCreatedAt(s),
       created_by: s.User ? { id: s.User.id, username: s.User.username } : null
     }))
@@ -92,6 +110,7 @@ router.get('/:id/snapshots/:snapshotId', authMiddleware, checkCanvasPermission('
 
     res.json({
       id: snapshot.id,
+      name: snapshot.name || null,
       data: Buffer.from(snapshot.content).toString('base64'),
       created_at: serializeCreatedAt(snapshot),
       created_by: snapshot.User ? { id: snapshot.User.id, username: snapshot.User.username } : snapshot.created_by
