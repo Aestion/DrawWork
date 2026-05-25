@@ -50,14 +50,19 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
   }, [tencentData])
 
   // Sync local data to Yjs
-  const syncToYjs = useCallback((data) => {
+  const syncToYjs = useCallback((data, origin = 'local-tencentmind-change') => {
     if (!yMap || !canEdit) return
     try {
       const clonedData = cloneTencentDataForYjs(data)
-      lastLocalSnapshotRef.current = JSON.stringify(clonedData)
+      // Only track as "local" when using the default origin, so callers
+      // like snapshot restore can pass a custom origin and have the Yjs
+      // observer process the update (triggering React re-render â†’ mind map apply).
+      if (origin === 'local-tencentmind-change') {
+        lastLocalSnapshotRef.current = JSON.stringify(clonedData)
+      }
       yMap.doc.transact(() => {
         yMap.set('__tencent_state', clonedData)
-      }, 'local-tencentmind-change')
+      }, origin)
     } catch (err) {
       console.error('[useTencentMindYjs] Failed to sync to Yjs:', err)
     }
@@ -162,7 +167,7 @@ export function useTencentMindYjs({ canvasId, roomId, token, canEdit }) {
 
       const loadFromHttp = async () => {
         try {
-          // HTTP API is the source of truth â€?always fetch from it.
+          // HTTP API is the source of truth ï¿½?always fetch from it.
           // The YMap shortcut was removed because Yjs may have stale
           // data from a previous session that lacks boundaries.
           const res = await api.get(`/canvases/${canvasId}/tencentmind`)

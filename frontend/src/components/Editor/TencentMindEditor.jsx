@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, forwardRef, useCallback, useImperativeHandle } from 'react'
+import * as Y from 'yjs'
 import { tencentToSimpleMindMap, simpleMindMapToTencent, DEFAULT_TENCENT_MIND } from '../../lib/tencent-mind-utils'
 import UnbalancedLayoutPlugin from '../../lib/unbalanced-layout-plugin'
 import { TENCENT_MARKER_ICONS, markerIdToIconKey, questionIcon, priorityIcon, progressIcon, starIcon, checkIcon, crossIcon, ideaIcon, warningIcon, targetIcon, clockIcon } from '../../lib/marker-icons'
@@ -1392,14 +1393,30 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     },
     loadData(base64Data) {
       try {
-        const jsonStr = decodeURIComponent(escape(atob(base64Data)))
-        const data = JSON.parse(jsonStr)
+        const binary = atob(base64Data)
+        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+
+        // Try JSON first (manual saves), then Yjs binary (auto-saves)
+        let data
+        try {
+          const jsonStr = new TextDecoder().decode(bytes)
+          data = JSON.parse(jsonStr)
+        } catch {
+          const doc = new Y.Doc()
+          try {
+            Y.applyUpdate(doc, bytes)
+            data = doc.getMap('tencentmind').toJSON().__tencent_state
+          } finally {
+            doc.destroy()
+          }
+        }
+
         if (!data || !data.rootTopic) {
           console.error('[TencentMind] Invalid snapshot data: missing rootTopic')
           return
         }
         originDataRef.current = data
-        syncToYjs(data)
+        syncToYjs(data, 'restore-snapshot')
       } catch (err) {
         console.error('[TencentMind] Failed to load snapshot:', err)
       }
