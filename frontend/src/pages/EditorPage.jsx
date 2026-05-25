@@ -89,9 +89,10 @@ export default function EditorPage() {
 
   // Version restore
   const excalidrawRef = useRef(null)
+  const tencentMindRef = useRef(null)
   const [snapshotSaving, setSnapshotSaving] = useState(false)
 
-  const saveSnapshot = async () => {
+  const saveSnapshot = async (name) => {
     if (!currentCanvas) return
     if (DISABLED_CANVAS_TYPES.has(currentCanvas.type)) return
     setSnapshotSaving(true)
@@ -99,10 +100,13 @@ export default function EditorPage() {
       let base64
       if (currentCanvas.type === 'excalidraw') {
         base64 = excalidrawRef.current.getSnapshotData()
+      } else if (currentCanvas.type === 'tencentmind') {
+        base64 = tencentMindRef.current.getSnapshotData()
       } else {
         return
       }
-      await api.post(`/canvases/${currentCanvas.id}/snapshot`, { data: base64 })
+      if (!base64) return
+      await api.post(`/canvases/${currentCanvas.id}/snapshot`, { data: base64, name })
     } finally {
       setSnapshotSaving(false)
     }
@@ -114,7 +118,14 @@ export default function EditorPage() {
     const res = await api.get(`/canvases/${currentCanvas.id}/snapshots/${snapshotId}`)
     if (currentCanvas.type === 'excalidraw') {
       excalidrawRef.current.loadData(res.data.data)
+    } else if (currentCanvas.type === 'tencentmind') {
+      tencentMindRef.current.loadData(res.data.data)
     }
+  }
+
+  const deleteSnapshot = async (snapshotId) => {
+    if (!currentCanvas) return
+    await api.delete(`/canvases/${currentCanvas.id}/snapshots/${snapshotId}`)
   }
 
   // Coordinate conversion for comment overlay
@@ -361,6 +372,7 @@ export default function EditorPage() {
                       <ErrorBoundary>
                         <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载腾讯思维...</div>}>
                           <TencentMindEditor
+                            ref={tencentMindRef}
                             canvasId={canvas.id}
                             roomId={canvas.yjs_room_id}
                             canEdit={canEdit}
@@ -415,6 +427,7 @@ export default function EditorPage() {
           onClose={() => setShowVersionHistory(false)}
           onSave={canEdit ? saveSnapshot : null}
           onRestore={canEdit ? restoreSnapshot : null}
+          onDelete={canEdit ? deleteSnapshot : null}
         />
       )}
 
