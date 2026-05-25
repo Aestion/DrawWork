@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, forwardRef, useCallback } from 'react'
+import { useEffect, useRef, useState, forwardRef, useCallback, useImperativeHandle } from 'react'
 import { tencentToSimpleMindMap, simpleMindMapToTencent, DEFAULT_TENCENT_MIND } from '../../lib/tencent-mind-utils'
 import UnbalancedLayoutPlugin from '../../lib/unbalanced-layout-plugin'
 import { TENCENT_MARKER_ICONS, markerIdToIconKey, questionIcon, priorityIcon, progressIcon, starIcon, checkIcon, crossIcon, ideaIcon, warningIcon, targetIcon, clockIcon } from '../../lib/marker-icons'
@@ -1383,6 +1383,28 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     lastBroadcastComparableSnapshotRef.current = comparableSnapshot
     syncToYjs(tencentData)
   }, [syncToYjs, currentLayout, currentTheme])
+
+  useImperativeHandle(ref, () => ({
+    getSnapshotData() {
+      if (!originDataRef.current) return null
+      const json = JSON.stringify(originDataRef.current)
+      return btoa(unescape(encodeURIComponent(json)))
+    },
+    loadData(base64Data) {
+      try {
+        const jsonStr = decodeURIComponent(escape(atob(base64Data)))
+        const data = JSON.parse(jsonStr)
+        if (!data || !data.rootTopic) {
+          console.error('[TencentMind] Invalid snapshot data: missing rootTopic')
+          return
+        }
+        originDataRef.current = data
+        syncToYjs(data)
+      } catch (err) {
+        console.error('[TencentMind] Failed to load snapshot:', err)
+      }
+    }
+  }), [syncToYjs])
 
   const handleLayoutChange = useCallback((layout) => {
     setCurrentLayout(layout)
