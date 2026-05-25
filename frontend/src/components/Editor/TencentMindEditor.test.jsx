@@ -5,8 +5,11 @@ import {
   canRunAssociativeLineControlDrag,
   normalizeAssociativeLineDataForNode,
   patchAssociativeLineInstance,
+  getTencentMindLayout,
+  getTencentMindTheme,
   shouldRestoreTencentMindMediaNode,
-  shouldSkipTencentRemoteApply
+  shouldSkipTencentRemoteApply,
+  withTencentMindFormat
 } from './TencentMindEditor'
 
 vi.mock('../../lib/axios', () => ({
@@ -34,6 +37,34 @@ vi.mock('../../hooks/useTencentMindYjs', () => ({
 vi.mock('../../stores/authStore', () => ({
   useAuthStore: () => ({ token: 'token', user: { id: 'u1', username: 'tester' } })
 }))
+
+describe('TencentMind format helpers', () => {
+  it('reads saved layout and theme from Tencent data for editor initialization', () => {
+    const data = {
+      layout: 'fishbone',
+      theme: { topic: 'green' }
+    }
+
+    expect(getTencentMindLayout(data)).toBe('fishbone')
+    expect(getTencentMindTheme(data)).toBe('green')
+  })
+
+  it('writes layout and theme without dropping relationships or extensions', () => {
+    const data = {
+      rootTopic: { id: 'root', title: 'Root' },
+      relationships: [{ id: 'line-1', end1Id: 'a', end2Id: 'b' }],
+      extensions: { custom: true },
+      theme: { topic: 'default' },
+      layout: 'mindMap'
+    }
+
+    expect(withTencentMindFormat(data, { layout: 'fishbone', theme: 'green' })).toEqual({
+      ...data,
+      layout: 'fishbone',
+      theme: { topic: 'green' }
+    })
+  })
+})
 
 describe('applyNodeDataPatch', () => {
   it('writes media metadata through setData and both node data objects', () => {

@@ -124,6 +124,16 @@ export function mediaOverlayInitialStyle(overlay) {
   }
 }
 
+export function overlayViewState(storedAppState, liveAppState) {
+  if (!liveAppState) return storedAppState || {}
+  return {
+    ...(storedAppState || {}),
+    scrollX: liveAppState.scrollX,
+    scrollY: liveAppState.scrollY,
+    zoom: liveAppState.zoom
+  }
+}
+
 // View state (scrollX, scrollY, zoom) should NOT be synced between users
 const VIEW_STATE_KEYS = ['scrollX', 'scrollY', 'zoom', 'scrollCenter']
 
@@ -369,6 +379,40 @@ export function decodeSnapshotScene(base64Data) {
   }
 }
 
+export function parseLocalSceneBackup(rawBackup) {
+  const parsed = JSON.parse(rawBackup)
+  const scene = parsed?.scene || parsed || {}
+
+  return {
+    scene: {
+      elements: Array.isArray(scene.elements) ? scene.elements : [],
+      appState: scene.appState || {},
+      files: scene.files || {}
+    },
+    savedAt: typeof parsed?.savedAt === 'number' ? parsed.savedAt : 0
+  }
+}
+
+export function shouldApplyHttpSnapshotAfterLocalBackup({
+  localBackupSavedAt,
+  httpSnapshotCreatedAt,
+  hasInitialSync,
+  currentElements
+}) {
+  if (hasInitialSync && (currentElements || []).length > 0) return false
+
+  if (!localBackupSavedAt) return true
+
+  const httpTime = Date.parse(httpSnapshotCreatedAt || '')
+  if (!Number.isFinite(httpTime)) return false
+
+  return httpTime > localBackupSavedAt
+}
+
+export function shouldDeferRemoteSceneApply({ isInteracting, isInitial, isActive }) {
+  return Boolean(isActive && isInteracting && !isInitial)
+}
+
 const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, roomId, canEdit, boardId, onConnectionChange, isActive = true }, ref) {
   const containerRef = useRef(null)
   const excalidrawRef = useRef(null)
@@ -384,6 +428,8 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
   const laserElementsRef = useRef(new Map()) // elementId → timeoutId
   const syncFrameRef = useRef(null) // RAF batching for Yjs sync
   const restoredFromBackupRef = useRef(false) // True after localStorage restore on page load
+  const localBackupSavedAtRef = useRef(0)
+  const pendingRemoteSceneRef = useRef(null)
   const [viewportVersion, setViewportVersion] = useState(0)
   const isInteractingRef = useRef(false) // Track interaction state without re-render
 
@@ -392,7 +438,6 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
   const [overlayState, setOverlayState] = useState(EMPTY_OVERLAY_STATE)
   const [mediaSources, setMediaSources] = useState({})
   const [mediaMimeTypes, setMediaMimeTypes] = useState({})
-  const [isInteracting, setIsInteracting] = useState(false)
   const overlayStateRef = useRef(EMPTY_OVERLAY_STATE) // Mirror for RAF position loop
   const mediaDomRefs = useRef(new Map()) // elementId → DOM element
 
@@ -596,15 +641,16 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
         const containerRect = containerRef.current?.getBoundingClientRect()
         const canvasEl = containerRef.current?.querySelector('.excalidraw__canvas')
         const canvasRect = canvasEl?.getBoundingClientRect()
+        const viewAppState = overlayViewState(appState, excalidrawRef.current?.getAppState?.())
 
         const offsetLeft = canvasRect?.left ?? containerRect?.left ?? 0
         const offsetTop = canvasRect?.top ?? containerRect?.top ?? 0
 
-        const zoom = normalizeZoom(appState?.zoom)
-        const scrollX = appState?.scrollX || 0
-        const scrollY = appState?.scrollY || 0
-        const zoomValue = typeof appState?.zoom?.value === 'number'
-          ? appState.zoom
+        const zoom = normalizeZoom(viewAppState?.zoom)
+        const scrollX = viewAppState?.scrollX || 0
+        const scrollY = viewAppState?.scrollY || 0
+        const zoomValue = typeof viewAppState?.zoom?.value === 'number'
+          ? viewAppState.zoom
           : { value: zoom }
 
         elements.forEach((element) => {
@@ -732,6 +778,20 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     })
   }, [queueOverlayStateUpdate])
 
+  const flushPendingRemoteScene = useCallback(() => {
+    const apiInstance = excalidrawRef.current
+    const pendingScene = pendingRemoteSceneRef.current
+    if (!apiInstance || !pendingScene || !isActiveRef.current || isInteractingRef.current) return
+
+    pendingRemoteSceneRef.current = null
+    remoteApplyRef.current = true
+    applyScene(apiInstance, pendingScene)
+    queueOverlayStateUpdate(pendingScene.elements, pendingScene.appState)
+    requestAnimationFrame(() => {
+      remoteApplyRef.current = false
+    })
+  }, [applyScene, queueOverlayStateUpdate])
+
   useEffect(() => {
     if (!isActive) return
     const apiInstance = excalidrawRef.current
@@ -763,6 +823,15 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       const signature = stableSceneSignature(nextScene.elements, nextScene.appState, nextScene.files)
       if (signature === lastSceneSignatureRef.current) return
 
+      if (shouldDeferRemoteSceneApply({
+        isInteracting: isInteractingRef.current,
+        isInitial: false,
+        isActive: isActiveRef.current
+      })) {
+        pendingRemoteSceneRef.current = nextScene
+        return
+      }
+
       remoteApplyRef.current = true
       applyScene(apiInstance, nextScene)
       requestAnimationFrame(() => {
@@ -788,7 +857,10 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       // HTTP keepalive fetch is unreliable for payloads >64KB (silently dropped by browser).
       try {
         const { elements, appState, files } = sceneRef.current
-        const json = JSON.stringify({ elements, appState, files })
+        const json = JSON.stringify({
+          scene: { elements, appState, files },
+          savedAt: Date.now()
+        })
         localStorage.setItem(LS_KEY_PREFIX + canvasId, json)
       } catch (e) {
         // localStorage full or unavailable — skip
@@ -832,6 +904,8 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     lastSceneSignatureRef.current = ''
     remoteApplyRef.current = false
     restoredFromBackupRef.current = false
+    localBackupSavedAtRef.current = 0
+    pendingRemoteSceneRef.current = null
     pendingMediaFetchesRef.current.clear()
     // NOTE: Do NOT revoke blob URLs on canvas switch.
     // setMediaSources({}) below unmounts overlay elements immediately.
@@ -867,16 +941,17 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       try {
         const backup = localStorage.getItem(LS_KEY_PREFIX + canvasId)
         if (!backup) return false
-        const parsed = JSON.parse(backup)
-        if (!parsed?.elements?.length) return false
+        const parsed = parseLocalSceneBackup(backup)
+        if (!parsed.savedAt && !parsed.scene.elements.length && !Object.keys(parsed.scene.files || {}).length) return false
 
         const backupScene = {
-          elements: parsed.elements,
-          appState: parsed.appState || {},
-          files: parsed.files || {}
+          elements: parsed.scene.elements,
+          appState: parsed.scene.appState,
+          files: parsed.scene.files
         }
 
         sceneRef.current = backupScene
+        localBackupSavedAtRef.current = parsed.savedAt
         setSceneData(backupScene)
         queueOverlayStateUpdate(backupScene.elements, backupScene.appState)
 
@@ -902,13 +977,12 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       .then((res) => {
         if (cancelled || !res.data?.exists || !res.data?.data) return
 
-        // If Yjs already synced, only apply HTTP snapshot when scene is empty.
-        // This handles the case where Yjs server didn't persist before disconnect
-        // but the keepalive HTTP snapshot has the latest state.
-        if (hasInitialSyncRef.current) {
-          const currentElements = sceneRef.current.elements || []
-          if (currentElements.length > 0) return
-        }
+        if (!shouldApplyHttpSnapshotAfterLocalBackup({
+          localBackupSavedAt: localBackupSavedAtRef.current,
+          httpSnapshotCreatedAt: res.data.created_at,
+          hasInitialSync: hasInitialSyncRef.current,
+          currentElements: sceneRef.current.elements || []
+        })) return
 
         let nextScene
         try {
@@ -1033,6 +1107,15 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
         return
       }
 
+      if (shouldDeferRemoteSceneApply({
+        isInteracting: isInteractingRef.current,
+        isInitial: meta.source === 'initial',
+        isActive: isActiveRef.current
+      })) {
+        pendingRemoteSceneRef.current = mergedScene
+        return
+      }
+
       remoteApplyRef.current = true
       applyScene(apiInstance, mergedScene)
 
@@ -1068,15 +1151,14 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       }
       if (!isInteractingRef.current) {
         isInteractingRef.current = true
-        setIsInteracting(true)
       }
     } else {
       if (isInteractingRef.current && !interactionDebounceRef.current) {
         interactionDebounceRef.current = setTimeout(() => {
           isInteractingRef.current = false
-          setIsInteracting(false)
           // Trigger one overlay update after interaction ends
           queueOverlayStateUpdate(elements, appState)
+          flushPendingRemoteScene()
         }, 80)
       }
     }
@@ -1175,7 +1257,7 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
       syncFrameRef.current = null
       setData(nextScene)
     }, 200)
-  }, [queueOverlayStateUpdate, setData, isInteracting])
+  }, [flushPendingRemoteScene, queueOverlayStateUpdate, setData])
 
   const insertMediaToCanvas = useCallback(async (file) => {
     if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {

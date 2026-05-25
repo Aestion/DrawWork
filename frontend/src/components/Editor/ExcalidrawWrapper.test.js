@@ -58,10 +58,28 @@ import {
   withDeletedElementTombstones,
   shouldFadeDeletedElement,
   decodeSnapshotScene,
-  sceneFromYMapJson
+  sceneFromYMapJson,
+  parseLocalSceneBackup,
+  shouldApplyHttpSnapshotAfterLocalBackup,
+  shouldDeferRemoteSceneApply,
+  overlayViewState
 } from './ExcalidrawWrapper'
 
 describe('media overlay transform', () => {
+  it('uses live Excalidraw viewport over stored overlay viewport during zoom', () => {
+    const view = overlayViewState(
+      { scrollX: 0, scrollY: 0, zoom: { value: 1 }, theme: 'light' },
+      { scrollX: 40, scrollY: 50, zoom: { value: 1.75 } }
+    )
+
+    expect(view).toMatchObject({
+      scrollX: 40,
+      scrollY: 50,
+      zoom: { value: 1.75 },
+      theme: 'light'
+    })
+  })
+
   it('mirrors around the element center so playback stays on top of the image layer', () => {
     const style = mediaOverlayTransformForElement({
       angle: 0,
@@ -295,6 +313,79 @@ describe('snapshot decoding', () => {
 
     expect(scene.elements).toHaveLength(1)
     expect(scene.elements[0]).toMatchObject({ id: 'rect1', type: 'rectangle' })
+  })
+})
+
+describe('local scene backup freshness', () => {
+  it('parses the current timestamped local backup format', () => {
+    const backup = parseLocalSceneBackup(JSON.stringify({
+      scene: {
+        elements: [{ id: 'deleted-rect', type: 'rectangle', isDeleted: true }],
+        appState: { theme: 'light' },
+        files: {}
+      },
+      savedAt: 1710000000000
+    }))
+
+    expect(backup.scene.elements[0]).toMatchObject({ id: 'deleted-rect', isDeleted: true })
+    expect(backup.savedAt).toBe(1710000000000)
+  })
+
+  it('keeps compatibility with the old raw scene local backup format', () => {
+    const backup = parseLocalSceneBackup(JSON.stringify({
+      elements: [{ id: 'old-rect', type: 'rectangle' }],
+      appState: {},
+      files: {}
+    }))
+
+    expect(backup.scene.elements[0].id).toBe('old-rect')
+    expect(backup.savedAt).toBe(0)
+  })
+
+  it('does not let an older HTTP snapshot overwrite a fresher local delete backup', () => {
+    expect(shouldApplyHttpSnapshotAfterLocalBackup({
+      localBackupSavedAt: 1710000005000,
+      httpSnapshotCreatedAt: '2024-03-09T15:59:59.000Z',
+      hasInitialSync: false,
+      currentElements: [{ id: 'rect', isDeleted: true }]
+    })).toBe(false)
+  })
+
+  it('allows a newer HTTP snapshot to replace a local backup', () => {
+    expect(shouldApplyHttpSnapshotAfterLocalBackup({
+      localBackupSavedAt: 1710000000000,
+      httpSnapshotCreatedAt: '2024-03-09T16:00:10.000Z',
+      hasInitialSync: false,
+      currentElements: [{ id: 'rect', isDeleted: true }]
+    })).toBe(true)
+  })
+
+  it('parses an intentionally empty timestamped local backup as valid scene data', () => {
+    const backup = parseLocalSceneBackup(JSON.stringify({
+      scene: { elements: [], appState: {}, files: {} },
+      savedAt: 1710000000000
+    }))
+
+    expect(backup.scene.elements).toEqual([])
+    expect(backup.savedAt).toBe(1710000000000)
+  })
+})
+
+describe('remote scene apply scheduling', () => {
+  it('defers non-initial remote updates while the user is interacting locally', () => {
+    expect(shouldDeferRemoteSceneApply({
+      isInteracting: true,
+      isInitial: false,
+      isActive: true
+    })).toBe(true)
+  })
+
+  it('does not defer initial data loads', () => {
+    expect(shouldDeferRemoteSceneApply({
+      isInteracting: true,
+      isInitial: true,
+      isActive: true
+    })).toBe(false)
   })
 })
 

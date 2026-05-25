@@ -6,6 +6,17 @@ const { registerAccount, createBoard, openBoard } = require('./utils');
 test.describe('Media Persistence', () => {
   test.use({ actionTimeout: 20000 });
 
+  function tinyGifBuffer() {
+    return Buffer.from([
+      0x47, 0x49, 0x46, 0x38, 0x37, 0x61,
+      0x0A, 0x00, 0x0A, 0x00, 0x80, 0x00, 0x00,
+      0x2C, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x00,
+      0x02,
+      0x02, 0x44, 0x01, 0x00,
+      0x3B
+    ]);
+  }
+
   test('uploaded GIF persists after page refresh', async ({ page }) => {
     await registerAccount(page);
     await createBoard(page, 'GIF Test Board');
@@ -22,21 +33,7 @@ test.describe('Media Persistence', () => {
 
     // Create a small valid GIF file (10x10 red square)
     // GIF87a format: header + logical screen descriptor + image descriptor + image data + trailer
-    const gifBuffer = Buffer.from([
-      // Header "GIF87a"
-      0x47, 0x49, 0x46, 0x38, 0x37, 0x61,
-      // Logical Screen Descriptor: 10x10 pixels, no GCT
-      0x0A, 0x00, 0x0A, 0x00, 0x80, 0x00, 0x00,
-      // Image Descriptor
-      0x2C, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x00,
-      // LZW Minimum Code Size
-      0x02,
-      // Image Data (compressed)
-      0x02, 0x44, 0x01, 0x00,
-      // Trailer
-      0x3B
-    ]);
-    fs.writeFileSync(gifPath, gifBuffer);
+    fs.writeFileSync(gifPath, tinyGifBuffer());
 
     // Click "Insert Media" button
     await page.click('button[aria-label="插入媒体"], button:has-text("插入媒体")');
@@ -109,5 +106,55 @@ test.describe('Media Persistence', () => {
 
     // Verify the editor still has content (the uploaded file should persist)
     await expect(page.locator('.excalidraw__canvas.interactive')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('GIF overlay tracks element position and size while zooming canvas', async ({ page }) => {
+    await registerAccount(page);
+    const boardName = `GIF Zoom ${Date.now()}`;
+    await createBoard(page, boardName);
+    await openBoard(page, boardName);
+
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles({ name: 'zoom.gif', mimeType: 'image/gif', buffer: tinyGifBuffer() });
+
+    await expect.poll(async () => {
+      return page.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().filter(e => e.type === 'image').length || 0);
+    }, { timeout: 15000 }).toBe(1);
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.pointer-events-none.absolute.inset-0 img').first()).toBeVisible({ timeout: 15000 });
+
+    await page.keyboard.press('Control++');
+    await page.keyboard.press('Control++');
+    await page.waitForTimeout(500);
+
+    const alignment = await page.evaluate(() => {
+      const exc = window.__EXCALIDRAW__;
+      const element = exc.getSceneElements().find(e => e.type === 'image');
+      const appState = exc.getAppState();
+      const zoom = typeof appState.zoom === 'number' ? appState.zoom : appState.zoom.value;
+      const canvasRect = document.querySelector('.excalidraw__canvas').getBoundingClientRect();
+      const overlayRect = document.querySelector('.pointer-events-none.absolute.inset-0 img').getBoundingClientRect();
+
+      return {
+        overlay: {
+          left: overlayRect.left,
+          top: overlayRect.top,
+          width: overlayRect.width,
+          height: overlayRect.height
+        },
+        expected: {
+          left: canvasRect.left + (element.x - appState.scrollX) * zoom,
+          top: canvasRect.top + (element.y - appState.scrollY) * zoom,
+          width: Math.abs(element.width) * zoom,
+          height: Math.abs(element.height) * zoom
+        }
+      };
+    });
+
+    expect(Math.abs(alignment.overlay.left - alignment.expected.left)).toBeLessThan(3);
+    expect(Math.abs(alignment.overlay.top - alignment.expected.top)).toBeLessThan(3);
+    expect(Math.abs(alignment.overlay.width - alignment.expected.width)).toBeLessThan(3);
+    expect(Math.abs(alignment.overlay.height - alignment.expected.height)).toBeLessThan(3);
   });
 });

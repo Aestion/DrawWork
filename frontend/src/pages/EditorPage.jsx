@@ -1,13 +1,11 @@
-import { useEffect, useState, useRef, useCallback, lazy, Suspense } from 'react'
+﻿import { useEffect, useState, useRef, useCallback, lazy, Suspense } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { useBoardStore } from '../stores/boardStore'
 import { useCanvasStore } from '../stores/canvasStore'
 import CanvasSidebar from '../components/Editor/CanvasSidebar'
 const ExcalidrawWrapper = lazy(() => import('../components/Editor/ExcalidrawWrapper'))
-const SimpleMindMapEditor = lazy(() => import('../components/Editor/SimpleMindMapEditor'))
 const TencentMindEditor = lazy(() => import('../components/Editor/TencentMindEditor'))
-import MindMapEditor from '../components/Editor/MindMapEditor'
 import KanbanEditor from '../components/Editor/KanbanEditor'
 import SwimlaneEditor from '../components/Editor/SwimlaneEditor'
 import SharePanel from '../components/Editor/SharePanel'
@@ -17,8 +15,20 @@ import ErrorBoundary from '../components/ErrorBoundary'
 import CommentsOverlay from '../components/Editor/CommentsOverlay'
 import VotePanel from '../components/Editor/VotePanel'
 import { ToastContainer, toast } from '../components/ui/Toast'
-import { treesToFlowData } from '../components/Editor/mindmap-utils'
 import api from '../lib/axios'
+
+const DISABLED_CANVAS_TYPES = new Set(['simplemindmap', 'mindelixir', 'mindmap'])
+
+function DisabledCanvasNotice() {
+  return (
+    <div className="flex-1 flex items-center justify-center bg-gray-50 text-gray-500">
+      <div className="text-center">
+        <div className="text-sm font-medium text-gray-700">此画布类型已停用</div>
+        <div className="mt-1 text-xs text-gray-400">请新建推荐画布类型继续使用。</div>
+      </div>
+    </div>
+  )
+}
 
 export default function EditorPage() {
   const { boardId } = useParams()
@@ -27,18 +37,18 @@ export default function EditorPage() {
   const { boards, fetchBoards, isLoading: boardsLoading } = useBoardStore()
   const { canvases, currentCanvas, fetchCanvases, createCanvas, deleteCanvas, updateCanvas, setCurrentCanvas, reset, isLoading: canvasesLoading } = useCanvasStore()
   const [board, setBoard] = useState(null)
-  // 优化连接状态管理，避免不必要的闪烁
+  // Keep connection status stable while canvases switch.
   const [connectionStatus, setConnectionStatus] = useState({ connected: false, synced: false, label: 'disconnected', onlineCount: 1 })
   const lastStatusRef = useRef(connectionStatus)
   const activeCanvasIdRef = useRef(null)
 
   const handleConnectionChange = useCallback((status, canvasId) => {
-    // 只处理当前激活画布的状态更新
+    // Only accept updates from the active canvas.
     if (canvasId && canvasId !== activeCanvasIdRef.current) {
       return
     }
 
-    // 优化状态更新逻辑，避免不必要的闪烁
+    // Avoid repeating identical connection-status updates.
     const newStatus = {
       connected: status.connected,
       synced: status.synced,
@@ -46,8 +56,7 @@ export default function EditorPage() {
       onlineCount: status.onlineCount
     }
 
-    // 只有在连接状态真正发生变化时才更新（避免同一状态重复更新）
-    // 使用 ref 而不是 useState 值来避免无限循环（严重 bug 修复！）
+    // Ref comparison avoids update loops from repeated equivalent status.
     const lastStatus = lastStatusRef.current
     const hasChanged = lastStatus.connected !== status.connected ||
                       lastStatus.synced !== status.synced ||
@@ -79,22 +88,16 @@ export default function EditorPage() {
   }, [currentCanvas?.id])
 
   // Version restore
-  const mindMapRef = useRef(null)
   const excalidrawRef = useRef(null)
-  const simpleMindMapRef = useRef(null)
-  const tencentMindRef = useRef(null)
   const [snapshotSaving, setSnapshotSaving] = useState(false)
 
   const saveSnapshot = async () => {
     if (!currentCanvas) return
+    if (DISABLED_CANVAS_TYPES.has(currentCanvas.type)) return
     setSnapshotSaving(true)
     try {
       let base64
-      if (currentCanvas.type === 'mindmap') {
-        const { roots, crossConnections } = mindMapRef.current.getSnapshotData()
-        const json = JSON.stringify({ roots, crossConnections })
-        base64 = btoa(unescape(encodeURIComponent(json)))
-      } else if (currentCanvas.type === 'excalidraw') {
+      if (currentCanvas.type === 'excalidraw') {
         base64 = excalidrawRef.current.getSnapshotData()
       } else {
         return
@@ -107,13 +110,9 @@ export default function EditorPage() {
 
   const restoreSnapshot = async (snapshotId) => {
     if (!currentCanvas) return
+    if (DISABLED_CANVAS_TYPES.has(currentCanvas.type)) return
     const res = await api.get(`/canvases/${currentCanvas.id}/snapshots/${snapshotId}`)
-    if (currentCanvas.type === 'mindmap') {
-      const json = decodeURIComponent(escape(atob(res.data.data)))
-      const { roots, crossConnections } = JSON.parse(json)
-      const { nodes, edges } = treesToFlowData(roots, crossConnections)
-      mindMapRef.current.loadData(nodes, edges)
-    } else if (currentCanvas.type === 'excalidraw') {
+    if (currentCanvas.type === 'excalidraw') {
       excalidrawRef.current.loadData(res.data.data)
     }
   }
@@ -134,25 +133,6 @@ export default function EditorPage() {
     return {
       x: px / vp.zoom + vp.scrollX,
       y: py / vp.zoom + vp.scrollY
-    }
-  }, [])
-
-  // Coordinate conversion for mindmap comment overlay
-  const mindmapSceneToPixel = useCallback((x, y) => {
-    const vp = mindMapRef.current?.getViewport()
-    if (!vp) return { left: x, top: y }
-    return {
-      left: x * vp.zoom + vp.x,
-      top: y * vp.zoom + vp.y
-    }
-  }, [])
-
-  const mindmapPixelToScene = useCallback((px, py) => {
-    const vp = mindMapRef.current?.getViewport()
-    if (!vp) return { x: px, y: py }
-    return {
-      x: (px - vp.x) / vp.zoom,
-      y: (py - vp.y) / vp.zoom
     }
   }, [])
 
@@ -229,8 +209,6 @@ export default function EditorPage() {
     // Flush pending Yjs sync before switching (prevents data loss)
     if (currentCanvas?.type === 'excalidraw') {
       excalidrawRef.current?.flushPendingSync?.()
-    } else if (currentCanvas?.type === 'mindmap') {
-      mindMapRef.current?.flushPendingSync?.()
     }
     activeCanvasIdRef.current = canvas?.id || null
     setCurrentCanvas(canvas)
@@ -361,31 +339,8 @@ export default function EditorPage() {
                           />
                         </Suspense>
                       </ErrorBoundary>
-                    ) : canvas.type === 'simplemindmap' ? (
-                      <ErrorBoundary>
-                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载 Mind-Map...</div>}>
-                          <SimpleMindMapEditor
-                            canvasId={canvas.id}
-                            roomId={canvas.yjs_room_id}
-                            canEdit={canEdit}
-                            boardId={boardId}
-                            onConnectionChange={handleConnectionChange}
-                            isActive={isActive}
-                          />
-                        </Suspense>
-                      </ErrorBoundary>
-                    ) : canvas.type === 'mindelixir' || canvas.type === 'mindmap' ? (
-                      <ErrorBoundary>
-                        <MindMapEditor
-                          ref={mindMapRef}
-                          canvasId={canvas.id}
-                          roomId={canvas.yjs_room_id}
-                          canEdit={canEdit}
-                          boardId={boardId}
-                          onConnectionChange={handleConnectionChange}
-                          isActive={isActive}
-                        />
-                      </ErrorBoundary>
+                    ) : ['simplemindmap', 'mindelixir', 'mindmap'].includes(canvas.type) ? (
+                      <DisabledCanvasNotice />
                     ) : canvas.type === 'kanban' ? (
                       <KanbanEditor
                         canvasId={canvas.id}
@@ -427,8 +382,8 @@ export default function EditorPage() {
                 <CommentsOverlay
                   canvasId={currentCanvas.id}
                   canComment={canEdit}
-                  sceneToPixel={currentCanvas.type === 'excalidraw' ? sceneToPixel : currentCanvas.type === 'mindmap' ? mindmapSceneToPixel : undefined}
-                  pixelToScene={currentCanvas.type === 'excalidraw' ? pixelToScene : currentCanvas.type === 'mindmap' ? mindmapPixelToScene : undefined}
+                  sceneToPixel={currentCanvas.type === 'excalidraw' ? sceneToPixel : undefined}
+                  pixelToScene={currentCanvas.type === 'excalidraw' ? pixelToScene : undefined}
                 />
               )}
               {showVotePanel && (
@@ -467,3 +422,4 @@ export default function EditorPage() {
     </div>
   )
 }
+

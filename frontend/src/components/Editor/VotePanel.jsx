@@ -2,6 +2,22 @@ import { useState, useRef, useEffect } from 'react'
 import { useVotes } from '../../hooks/useVotes'
 import { toast } from '../ui/Toast'
 
+export function normalizeVoteCount(count) {
+  const numericCount = Number(count)
+  return Number.isFinite(numericCount) ? numericCount : 0
+}
+
+export function getTotalVoteCount(results = []) {
+  return results.reduce((sum, r) => sum + normalizeVoteCount(r.count), 0)
+}
+
+export function buildVoteResultMap(results = []) {
+  return results.reduce((map, r) => {
+    map[r.target_id] = normalizeVoteCount(r.count)
+    return map
+  }, {})
+}
+
 export default function VotePanel({ canvasId, canEdit, onClose }) {
   const { votes, loading, createVote, submitVote, closeVote, fetchResults } = useVotes(canvasId, { refetchInterval: 5000 })
   const [resultsMap, setResultsMap] = useState({})
@@ -98,9 +114,8 @@ export default function VotePanel({ canvasId, canEdit, onClose }) {
         {!loading && votes.map(v => {
           const options = v.scope_data?.options || []
           const results = resultsMap[v.id] || []
-          const resultMap = {}
-          results.forEach(r => { resultMap[r.target_id] = r.count })
-          const totalVotes = results.reduce((sum, r) => sum + r.count, 0)
+          const resultMap = buildVoteResultMap(results)
+          const totalVotes = getTotalVoteCount(results)
           const myVoteCount = v.my_vote_count || 0
           const hasVoted = myVoteCount > 0
           const remaining = (v.votes_per_user || 1) - myVoteCount
@@ -140,7 +155,7 @@ export default function VotePanel({ canvasId, canEdit, onClose }) {
               <div className="space-y-1.5">
                 {options.map((opt, idx) => {
                   const count = resultMap[opt] || 0
-                  const maxCount = Math.max(...results.map(r => r.count), 1)
+                  const maxCount = Math.max(...results.map(r => normalizeVoteCount(r.count)), 1)
                   const pct = maxCount > 0 ? (count / maxCount) * 100 : 0
                   const canVote = !closed && remaining > 0 && !submitting[v.id]
 

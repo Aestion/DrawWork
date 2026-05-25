@@ -696,6 +696,250 @@ test.describe('Collaboration', () => {
     }
   });
 
+  test('deleted Excalidraw elements stay deleted after refresh and reopen', async ({ browser }) => {
+    test.setTimeout(120000);
+    const ctxA = await browser.newContext();
+    const ctxB = await browser.newContext();
+    const pageA = await ctxA.newPage();
+    const pageB = await ctxB.newPage();
+
+    try {
+      const userA = await registerGetUser(pageA);
+      const boardName = `DeletePersist ${Date.now()}`;
+      await createBoard(pageA, boardName);
+      await openBoard(pageA, boardName);
+      const boardId = await getBoardId(pageA);
+      expect(boardId).toBeTruthy();
+
+      const userB = await registerGetUser(pageB);
+      const userBId = await getUserId(pageB, userB.token);
+      expect(userBId).toBeTruthy();
+      const shareResult = await shareBoardWithUser(pageA, boardId, userBId);
+      expect([200, 201]).toContain(shareResult.status);
+
+      await pageB.goto('/');
+      await pageB.waitForTimeout(1000);
+      await openBoard(pageB, boardName);
+      await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+
+      const canvasA = pageA.locator('.excalidraw__canvas.interactive');
+      const boxA = await canvasA.boundingBox();
+      expect(boxA).not.toBeNull();
+      const acx = boxA.x + boxA.width / 2;
+      const acy = boxA.y + boxA.height / 2;
+
+      await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
+      await pageA.waitForTimeout(300);
+      await pageA.mouse.move(acx - 100, acy - 80);
+      await pageA.mouse.down();
+      await pageA.mouse.move(acx - 10, acy + 10);
+      await pageA.mouse.up();
+      await pageA.waitForTimeout(500);
+
+      await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'ellipse' }));
+      await pageA.waitForTimeout(300);
+      await pageA.mouse.move(acx + 80, acy - 80);
+      await pageA.mouse.down();
+      await pageA.mouse.move(acx + 180, acy + 20);
+      await pageA.mouse.up();
+
+      await waitForSceneElements(pageB, 2);
+
+      await pageA.evaluate(() => {
+        const exc = window.__EXCALIDRAW__;
+        const rect = exc.getSceneElements().find(e => e.type === 'rectangle');
+        exc.updateScene({
+          elements: exc.getSceneElements(),
+          appState: { ...exc.getAppState(), selectedElementIds: rect ? { [rect.id]: true } : {} }
+        });
+      });
+      await pageA.keyboard.press('Delete');
+
+      await expect.poll(async () => {
+        return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().map(e => e.type) || []);
+      }, { timeout: 15000 }).toEqual(['ellipse']);
+
+      await expect.poll(async () => {
+        return pageB.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().map(e => e.type) || []);
+      }, { timeout: 20000 }).toEqual(['ellipse']);
+
+      await pageA.reload();
+      await pageA.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+      await expect.poll(async () => {
+        return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().map(e => e.type) || []);
+      }, { timeout: 20000 }).toEqual(['ellipse']);
+
+      await pageB.reload();
+      await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+      await expect.poll(async () => {
+        return pageB.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().map(e => e.type) || []);
+      }, { timeout: 20000 }).toEqual(['ellipse']);
+
+      await ctxA.close();
+      await ctxB.close();
+      await new Promise(resolve => setTimeout(resolve, 6000));
+      const ctxAReopen = await browser.newContext();
+      const pageAReopen = await ctxAReopen.newPage();
+      try {
+        await pageAReopen.goto('/login');
+        await pageAReopen.fill('input[type="email"]', userA.email);
+        await pageAReopen.fill('input[type="password"]', userA.password);
+        await pageAReopen.click('button[type="submit"]');
+        await expect(pageAReopen).toHaveURL('/', { timeout: 15000 });
+        await openBoard(pageAReopen, boardName);
+        await expect.poll(async () => {
+          return pageAReopen.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().map(e => e.type) || []);
+        }, { timeout: 20000 }).toEqual(['ellipse']);
+      } finally {
+        await ctxAReopen.close();
+      }
+    } finally {
+      await ctxA.close().catch(() => {});
+      await ctxB.close().catch(() => {});
+    }
+  });
+
+  test('single user can delete all Excalidraw elements and reopen an empty canvas', async ({ browser }) => {
+    test.setTimeout(90000);
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+
+    try {
+      const user = await registerGetUser(page);
+      const boardName = `DeleteAllPersist ${Date.now()}`;
+      await createBoard(page, boardName);
+      await openBoard(page, boardName);
+
+      const canvas = page.locator('.excalidraw__canvas.interactive');
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+
+      await page.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
+      await page.waitForTimeout(300);
+      await page.mouse.move(cx - 120, cy - 80);
+      await page.mouse.down();
+      await page.mouse.move(cx - 20, cy + 20);
+      await page.mouse.up();
+
+      await page.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'ellipse' }));
+      await page.waitForTimeout(300);
+      await page.mouse.move(cx + 60, cy - 80);
+      await page.mouse.down();
+      await page.mouse.move(cx + 160, cy + 20);
+      await page.mouse.up();
+
+      await expect.poll(async () => {
+        return page.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+      }, { timeout: 15000 }).toBe(2);
+
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Control+a');
+      await page.keyboard.press('Delete');
+
+      await expect.poll(async () => {
+        return page.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length ?? -1);
+      }, { timeout: 15000 }).toBe(0);
+
+      await page.reload();
+      await page.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+      await expect.poll(async () => {
+        return page.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length ?? -1);
+      }, { timeout: 20000 }).toBe(0);
+
+      await ctx.close();
+      await new Promise(resolve => setTimeout(resolve, 6000));
+
+      const reopenCtx = await browser.newContext();
+      const reopenPage = await reopenCtx.newPage();
+      try {
+        await reopenPage.goto('/login');
+        await reopenPage.fill('input[type="email"]', user.email);
+        await reopenPage.fill('input[type="password"]', user.password);
+        await reopenPage.click('button[type="submit"]');
+        await expect(reopenPage).toHaveURL('/', { timeout: 15000 });
+        await openBoard(reopenPage, boardName);
+        await expect.poll(async () => {
+          return reopenPage.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length ?? -1);
+        }, { timeout: 20000 }).toBe(0);
+      } finally {
+        await reopenCtx.close();
+      }
+    } finally {
+      await ctx.close().catch(() => {});
+    }
+  });
+
+  test('user can add new Excalidraw elements after deleting previous ones', async ({ browser }) => {
+    test.setTimeout(90000);
+    const ctxA = await browser.newContext();
+    const ctxB = await browser.newContext();
+    const pageA = await ctxA.newPage();
+    const pageB = await ctxB.newPage();
+
+    try {
+      const userA = await registerGetUser(pageA);
+      const boardName = `DeleteThenAdd ${Date.now()}`;
+      await createBoard(pageA, boardName);
+      await openBoard(pageA, boardName);
+      const boardId = await getBoardId(pageA);
+      expect(boardId).toBeTruthy();
+
+      const userB = await registerGetUser(pageB);
+      const userBId = await getUserId(pageB, userB.token);
+      expect(userBId).toBeTruthy();
+      const shareResult = await shareBoardWithUser(pageA, boardId, userBId);
+      expect([200, 201]).toContain(shareResult.status);
+
+      await pageB.goto('/');
+      await pageB.waitForTimeout(1000);
+      await openBoard(pageB, boardName);
+      await pageB.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+
+      const canvasA = pageA.locator('.excalidraw__canvas.interactive');
+      const boxA = await canvasA.boundingBox();
+      expect(boxA).not.toBeNull();
+      const cx = boxA.x + boxA.width / 2;
+      const cy = boxA.y + boxA.height / 2;
+
+      await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
+      await pageA.waitForTimeout(300);
+      await pageA.mouse.move(cx - 130, cy - 70);
+      await pageA.mouse.down();
+      await pageA.mouse.move(cx - 30, cy + 30);
+      await pageA.mouse.up();
+      await waitForSceneElements(pageB, 1);
+
+      await pageA.keyboard.press('Escape');
+      await pageA.keyboard.press('Control+a');
+      await pageA.keyboard.press('Delete');
+      await expect.poll(async () => {
+        return pageB.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length ?? -1);
+      }, { timeout: 20000 }).toBe(0);
+
+      await pageA.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'diamond' }));
+      await pageA.waitForTimeout(300);
+      await pageA.mouse.move(cx + 40, cy - 70);
+      await pageA.mouse.down();
+      await pageA.mouse.move(cx + 140, cy + 30);
+      await pageA.mouse.up();
+
+      await expect.poll(async () => {
+        return pageB.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().map(e => e.type) || []);
+      }, { timeout: 20000 }).toEqual(['diamond']);
+
+      await pageA.reload();
+      await pageA.locator('.excalidraw__canvas.interactive').first().waitFor({ state: 'visible', timeout: 10000 });
+      await expect.poll(async () => {
+        return pageA.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().map(e => e.type) || []);
+      }, { timeout: 20000 }).toEqual(['diamond']);
+    } finally {
+      await ctxA.close().catch(() => {});
+      await ctxB.close().catch(() => {});
+    }
+  });
+
   test('mouse drag: user A drags an element, user B sees new position', async ({ browser }) => {
     test.setTimeout(90000);
     const ctxA = await browser.newContext();
@@ -885,6 +1129,49 @@ test.describe('Collaboration', () => {
       await ctxA.close();
       await ctxB.close();
     }
+  });
+
+  test('format toolbar changes selected Excalidraw element style', async ({ page }) => {
+    test.setTimeout(60000);
+
+    await registerGetUser(page);
+    const boardName = `FormatToolbar ${Date.now()}`;
+    await createBoard(page, boardName);
+    await openBoard(page, boardName);
+
+    const canvas = page.locator('.excalidraw__canvas.interactive');
+    await canvas.waitFor({ state: 'visible', timeout: 10000 });
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    await page.evaluate(() => window.__EXCALIDRAW__.setActiveTool({ type: 'rectangle' }));
+    await page.waitForTimeout(300);
+    await page.mouse.move(cx - 100, cy - 80);
+    await page.mouse.down();
+    await page.mouse.move(cx + 100, cy + 80);
+    await page.mouse.up();
+
+    await expect.poll(async () => {
+      return page.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.().length || 0);
+    }, { timeout: 10000 }).toBe(1);
+
+    await page.evaluate(() => {
+      const exc = window.__EXCALIDRAW__;
+      const rect = exc.getSceneElements()[0];
+      exc.updateScene({
+        elements: exc.getSceneElements(),
+        appState: { ...exc.getAppState(), selectedElementIds: { [rect.id]: true } }
+      });
+    });
+
+    await expect(page.locator('button[title="#e03131"]').first()).toBeVisible({ timeout: 10000 });
+    await page.locator('button[title="#e03131"]').first().click();
+
+    await expect.poll(async () => {
+      return page.evaluate(() => window.__EXCALIDRAW__?.getSceneElements?.()[0]?.strokeColor);
+    }, { timeout: 10000 }).toBe('#e03131');
   });
 
   test('resize sync: user A resizes an element, user B sees new dimensions', async ({ browser }) => {

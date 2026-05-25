@@ -36,6 +36,26 @@ const THEMES = [
   'simple', 'fresh', 'fresh-blue', 'fresh-red'
 ]
 
+const DEFAULT_LAYOUT = 'mindMap'
+const DEFAULT_THEME = 'default'
+
+export function getTencentMindLayout(data) {
+  return data?.layout || DEFAULT_LAYOUT
+}
+
+export function getTencentMindTheme(data) {
+  if (typeof data?.theme === 'string') return data.theme
+  return data?.theme?.topic || data?.theme?.template || DEFAULT_THEME
+}
+
+export function withTencentMindFormat(data, { layout, theme } = {}) {
+  if (!data) return data
+  const next = { ...data }
+  if (layout) next.layout = layout
+  if (theme) next.theme = { ...(typeof data.theme === 'object' && data.theme ? data.theme : {}), topic: theme }
+  return next
+}
+
 const VIDEO_PLACEHOLDER = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#e2e8f0" rx="6"/><circle cx="60" cy="40" r="16" fill="#64748b"/><polygon points="54,32 54,48 66,40" fill="#fff"/></svg>')
 const INITIAL_DATA_CHANGE_SUPPRESS_MS = 800
 const REMOTE_DATA_CHANGE_SUPPRESS_MS = 5000
@@ -884,12 +904,16 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       }
 
       const rawData = originDataRef.current
+      const initialLayout = getTencentMindLayout(rawData)
+      const initialTheme = getTencentMindTheme(rawData)
+      setCurrentLayout(initialLayout)
+      setCurrentTheme(initialTheme)
       const smmData = tencentToSimpleMindMap(rawData)
       mindMap = new MindMap({
         el: containerRef.current,
         data: smmData,
-        layout: currentLayout,
-        theme: currentTheme,
+        layout: initialLayout,
+        theme: initialTheme,
         readonly,
         fit: true,
         enableFreeDrag: false,
@@ -978,7 +1002,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
           if (!hasPendingLocalSaveRef.current && !hasRecentLocalInteraction) return
           const currentData = buildDataTreeFromNodes()
           if (!currentData) return
-          const snapshot = comparableTencentMindSnapshot(simpleMindMapToTencent(currentData, originDataRef.current))
+          const snapshot = comparableTencentMindSnapshot(withTencentMindFormat(
+            simpleMindMapToTencent(currentData, originDataRef.current),
+            {
+              layout: mmRef.current?.getLayout?.() || currentLayout,
+              theme: mmRef.current?.getTheme?.() || currentTheme
+            }
+          ))
           if (snapshot === lastAppliedRemoteComparableSnapshotRef.current || snapshot === lastSavedComparableSnapshotRef.current) return
         }
         hasPendingLocalSaveRef.current = true
@@ -1050,6 +1080,16 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       applyingRemoteUpdateRef.current = true
       ignoreDataChangeUntilRef.current = Date.now() + REMOTE_DATA_CHANGE_SUPPRESS_MS
       clearTimeout(saveTimerRef.current)
+      const remoteLayout = getTencentMindLayout(yjsTencentData)
+      const remoteTheme = getTencentMindTheme(yjsTencentData)
+      setCurrentLayout(remoteLayout)
+      setCurrentTheme(remoteTheme)
+      if (mmRef.current.getLayout?.() !== remoteLayout) {
+        mmRef.current.setLayout(remoteLayout)
+      }
+      if (mmRef.current.getTheme?.() !== remoteTheme) {
+        mmRef.current.setTheme(remoteTheme)
+      }
       const smmData = tencentToSimpleMindMap(yjsTencentData)
       const appliedInPlace = applyRemoteDataInPlace(mmRef.current, smmData, yjsTencentData)
       if (!appliedInPlace) {
@@ -1231,7 +1271,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       normalizeAssociativeLineDataForMindMap(mmRef.current)
       const currentData = buildDataTreeFromNodes()
       if (!currentData) return
-      const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
+      const tencentData = withTencentMindFormat(
+        simpleMindMapToTencent(currentData, originDataRef.current),
+        {
+          layout: mmRef.current.getLayout?.() || currentLayout,
+          theme: mmRef.current.getTheme?.() || currentTheme
+        }
+      )
 
       // Persist associative lines as Tencent relationships (always overwrite)
       const lineList = mmRef.current.associativeLine?.lineList || []
@@ -1313,7 +1359,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     } catch (err) {
       console.error('Failed to save tencent mind data:', err)
     }
-  }, [canvasId, syncToYjs])
+  }, [canvasId, syncToYjs, currentLayout, currentTheme])
 
   saveDataRef.current = saveData
 
@@ -1322,7 +1368,13 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     normalizeAssociativeLineDataForMindMap(mmRef.current)
     const currentData = buildDataTreeFromNodes()
     if (!currentData) return
-    const tencentData = simpleMindMapToTencent(currentData, originDataRef.current)
+    const tencentData = withTencentMindFormat(
+      simpleMindMapToTencent(currentData, originDataRef.current),
+      {
+        layout: mmRef.current.getLayout?.() || currentLayout,
+        theme: mmRef.current.getTheme?.() || currentTheme
+      }
+    )
     const snapshot = JSON.stringify(tencentData)
     const comparableSnapshot = comparableTencentMindSnapshot(tencentData)
     if (snapshot === lastBroadcastSnapshotRef.current || snapshot === lastAppliedRemoteSnapshotRef.current) return
@@ -1330,17 +1382,29 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     lastBroadcastSnapshotRef.current = snapshot
     lastBroadcastComparableSnapshotRef.current = comparableSnapshot
     syncToYjs(tencentData)
-  }, [syncToYjs])
+  }, [syncToYjs, currentLayout, currentTheme])
 
   const handleLayoutChange = useCallback((layout) => {
     setCurrentLayout(layout)
     mmRef.current?.setLayout(layout)
-  }, [])
+    if (originDataRef.current) {
+      originDataRef.current = withTencentMindFormat(originDataRef.current, { layout })
+      broadcastCurrentData()
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = setTimeout(() => saveDataRef.current?.(), 200)
+    }
+  }, [broadcastCurrentData])
 
   const handleThemeChange = useCallback((theme) => {
     setCurrentTheme(theme)
     mmRef.current?.setTheme(theme)
-  }, [])
+    if (originDataRef.current) {
+      originDataRef.current = withTencentMindFormat(originDataRef.current, { theme })
+      broadcastCurrentData()
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = setTimeout(() => saveDataRef.current?.(), 200)
+    }
+  }, [broadcastCurrentData])
 
   const handleAddMedia = useCallback(() => {
     const activeNodes = mmRef.current?.renderer?.activeNodeList
