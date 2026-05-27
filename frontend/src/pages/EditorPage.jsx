@@ -87,6 +87,14 @@ export default function EditorPage() {
     }
   }, [currentCanvas?.id])
 
+  useEffect(() => {
+    const validCanvasIds = new Set(canvases.map(canvas => canvas.id))
+    setMountedCanvases(prev => {
+      const next = new Set([...prev].filter(id => validCanvasIds.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [canvases])
+
   // Version restore
   const excalidrawRef = useRef(null)
   const tencentMindRef = useRef(null)
@@ -370,7 +378,7 @@ export default function EditorPage() {
                       />
                     ) : canvas.type === 'tencentmind' ? (
                       <ErrorBoundary>
-                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载腾讯思维...</div>}>
+                        <Suspense fallback={<div className="flex-1 flex items-center justify-center text-gray-400">加载思维导图...</div>}>
                           <TencentMindEditor
                             ref={tencentMindRef}
                             canvasId={canvas.id}

@@ -40,6 +40,30 @@ const THEMES = [
 const DEFAULT_LAYOUT = 'mindMap'
 const DEFAULT_THEME = 'default'
 
+export const TENCENT_MIND_THEME_CONFIGS = {
+  classic: { lineColor: '#6b7280', root: { fillColor: '#374151' }, second: { borderColor: '#6b7280', color: '#111827' }, node: { color: '#374151' } },
+  classic2: { lineColor: '#8b5cf6', root: { fillColor: '#6d28d9' }, second: { borderColor: '#8b5cf6', color: '#312e81' }, node: { color: '#4c1d95' } },
+  dark: { backgroundColor: '#111827', lineColor: '#9ca3af', root: { fillColor: '#f9fafb', color: '#111827' }, second: { fillColor: '#1f2937', borderColor: '#9ca3af', color: '#f9fafb' }, node: { fillColor: '#111827', borderColor: '#6b7280', color: '#e5e7eb' } },
+  blue: { lineColor: '#2563eb', root: { fillColor: '#2563eb' }, second: { borderColor: '#60a5fa', color: '#1e3a8a' }, node: { color: '#1d4ed8' } },
+  green: { lineColor: '#16a34a', root: { fillColor: '#16a34a' }, second: { borderColor: '#4ade80', color: '#14532d' }, node: { color: '#166534' } },
+  purple: { lineColor: '#9333ea', root: { fillColor: '#9333ea' }, second: { borderColor: '#c084fc', color: '#581c87' }, node: { color: '#7e22ce' } },
+  red: { lineColor: '#dc2626', root: { fillColor: '#dc2626' }, second: { borderColor: '#f87171', color: '#7f1d1d' }, node: { color: '#b91c1c' } },
+  orange: { lineColor: '#ea580c', root: { fillColor: '#ea580c' }, second: { borderColor: '#fb923c', color: '#7c2d12' }, node: { color: '#c2410c' } },
+  gold: { lineColor: '#ca8a04', root: { fillColor: '#ca8a04' }, second: { borderColor: '#facc15', color: '#713f12' }, node: { color: '#a16207' } },
+  simple: { lineColor: '#64748b', root: { fillColor: '#0f172a' }, second: { fillColor: '#fff', borderColor: '#cbd5e1', color: '#0f172a' }, node: { fillColor: '#fff', borderColor: '#e2e8f0', color: '#334155' } },
+  fresh: { backgroundColor: '#f8fafc', lineColor: '#14b8a6', root: { fillColor: '#14b8a6' }, second: { borderColor: '#5eead4', color: '#134e4a' }, node: { color: '#0f766e' } },
+  'fresh-blue': { backgroundColor: '#f8fbff', lineColor: '#0ea5e9', root: { fillColor: '#0ea5e9' }, second: { borderColor: '#7dd3fc', color: '#075985' }, node: { color: '#0369a1' } },
+  'fresh-red': { backgroundColor: '#fffafa', lineColor: '#f43f5e', root: { fillColor: '#f43f5e' }, second: { borderColor: '#fda4af', color: '#881337' }, node: { color: '#be123c' } }
+}
+
+export function registerTencentMindThemes(MindMap) {
+  if (!MindMap || MindMap._drawworkTencentThemesRegistered) return
+  Object.entries(TENCENT_MIND_THEME_CONFIGS).forEach(([name, config]) => {
+    MindMap.defineTheme?.(name, config)
+  })
+  MindMap._drawworkTencentThemesRegistered = true
+}
+
 export function getTencentMindLayout(data) {
   return data?.layout || DEFAULT_LAYOUT
 }
@@ -263,6 +287,48 @@ export function canCompleteAssociativeLineControlDrag(instance) {
   return true
 }
 
+export function stabilizeAssociativeLineControlDrag(instance) {
+  if (!canCompleteAssociativeLineControlDrag(instance)) return false
+  const { pos, startPoint, endPoint, targetIndex } = instance.controlPointMousemoveState
+  const [, , , node] = instance.activeLine
+  const index = Number(targetIndex)
+  const data = node.getData?.() || node.nodeData?.data || node.data || {}
+  const snapshot = instance.__drawworkControlDragSnapshot || {}
+  const existingPoints = Array.isArray(data.associativeLinePoint)
+    ? data.associativeLinePoint.slice()
+    : []
+  const existingOffsets = Array.isArray(data.associativeLineTargetControlOffsets)
+    ? data.associativeLineTargetControlOffsets.slice()
+    : []
+  const currentPoint = {
+    ...existingPoints[index],
+    startPoint: normalizePoint(startPoint),
+    endPoint: normalizePoint(endPoint)
+  }
+  const currentOffsets = normalizeControlOffsetEntry(
+    Array.isArray(snapshot.offsets?.[index]) ? snapshot.offsets[index] : existingOffsets[index],
+    currentPoint
+  )
+  const draggedFirstPoint = instance.mousedownControlPointKey === 'controlPoint1'
+  const nextOffsets = draggedFirstPoint
+    ? [
+        { x: Number(pos.x) - currentPoint.startPoint.x, y: Number(pos.y) - currentPoint.startPoint.y },
+        currentOffsets[1]
+      ]
+    : [
+        currentOffsets[0],
+        { x: Number(pos.x) - currentPoint.endPoint.x, y: Number(pos.y) - currentPoint.endPoint.y }
+      ]
+
+  existingPoints[index] = currentPoint
+  existingOffsets[index] = nextOffsets.map(normalizePoint)
+  applyNodeDataPatch(node, {
+    associativeLinePoint: existingPoints,
+    associativeLineTargetControlOffsets: existingOffsets
+  })
+  return true
+}
+
 function resetAssociativeLineControlDrag(instance) {
   if (typeof instance?.resetControlPoint === 'function') {
     instance.resetControlPoint()
@@ -327,8 +393,20 @@ export function patchAssociativeLineInstance(instance) {
     }
     normalizeAssociativeLineDataForMindMap(this.mindMap)
     try {
-      return originalControlPointMouseup.apply(this, args)
+      const [, , , node] = this.activeLine
+      const data = node?.getData?.() || node?.nodeData?.data || node?.data || {}
+      this.__drawworkControlDragSnapshot = {
+        points: Array.isArray(data.associativeLinePoint) ? data.associativeLinePoint.slice() : [],
+        offsets: Array.isArray(data.associativeLineTargetControlOffsets)
+          ? data.associativeLineTargetControlOffsets.map(entry => Array.isArray(entry) ? entry.map(point => ({ ...point })) : entry)
+          : []
+      }
+      const result = originalControlPointMouseup.apply(this, args)
+      stabilizeAssociativeLineControlDrag(this)
+      this.__drawworkControlDragSnapshot = null
+      return result
     } catch (err) {
+      this.__drawworkControlDragSnapshot = null
       return recoverAssociativeLineControlDrag(this, err)
     }
   }.bind(instance)
@@ -819,6 +897,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       ])
       const MindMap = MindMapModule.default
       if (!mounted) return
+      registerTencentMindThemes(MindMap)
 
       const DragClass = DragModule.default
 
@@ -851,20 +930,26 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       DragClass.prototype.handleMindMap = function(node) {
         const checkList = node.parent
           ? node.parent.children.filter(item => {
+              const sameDir = node.layerIndex === 1 ? item.dir === node.dir : true
+              return sameDir && !this.checkIsInBeingDragNodeList(item)
+            })
+          : []
+        const allSiblings = node.parent
+          ? node.parent.children.filter(item => {
               return !this.checkIsInBeingDragNodeList(item)
             })
           : []
 
         // 边缘前置检测：仅对一级节点，在所有节点之上/之下触发
         // 按光标 X 位置判断目标侧，优先检查距离更近的一侧
-        if (node.layerIndex === 1 && !this.overlapNode && !this.prevNode && !this.nextNode && checkList.length > 0) {
+        if (node.layerIndex === 1 && !this.overlapNode && !this.prevNode && !this.nextNode && allSiblings.length > 0) {
           const cursorY = this.mouseMoveY
           const cursorX = this.mouseMoveX
           const edgeZone = 60
           const rootCenter = node.parent ? (node.parent.left || 0) + (node.parent.width || 0) / 2 : 0
 
-          const leftSide = checkList.filter(n => n.data?.dir === 'left').sort((a, b) => (a.top || 0) - (b.top || 0))
-          const rightSide = checkList.filter(n => n.data?.dir === 'right').sort((a, b) => (a.top || 0) - (b.top || 0))
+          const leftSide = allSiblings.filter(n => n.data?.dir === 'left').sort((a, b) => (a.top || 0) - (b.top || 0))
+          const rightSide = allSiblings.filter(n => n.data?.dir === 'right').sort((a, b) => (a.top || 0) - (b.top || 0))
 
           // 光标偏左先检左，偏右先检右
           const sides = cursorX < rootCenter
@@ -1625,7 +1710,7 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
     <div className="flex-1 flex flex-col bg-gray-50">
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 bg-white border-b shrink-0 flex-wrap">
-        <span className="text-xs text-gray-400 font-mono mr-2">腾讯思维</span>
+        <span className="text-xs text-gray-400 font-mono mr-2">思维导图</span>
 
         <select
           className="text-xs border rounded px-2 py-1"

@@ -74,8 +74,8 @@ async function navigateToTencentMind(page, boardId) {
     await tencentItem.click()
     await page.waitForTimeout(500)
   }
-  // Wait for the editor to render (look for the toolbar title "腾讯思维")
-  await page.waitForSelector('text=腾讯思维', { timeout: 20000 })
+  // Wait for the editor to render (look for the toolbar title "思维导图")
+  await page.waitForSelector('text=思维导图', { timeout: 20000 })
   // Wait for the simple-mind-map SVG to render (large SVG in .smm-mind-map-container)
   await page.waitForSelector('.smm-mind-map-container svg', { timeout: 10000 })
   // Wait for initial data to load (foreignObject richtext nodes)

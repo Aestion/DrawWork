@@ -35,8 +35,8 @@
 | 工具 | 引擎 | 亮点 |
 |------|------|------|
 | **Excalidraw** | @excalidraw/excalidraw | 自由手绘、图形、富媒体、手绘风格 |
-| **思维导图** | React Flow / MindElixir / SimpleMindMap / JsMind / Markmap / Tencent | 多根节点、跨树连线、分支折叠、Markdown 导入导出、自动布局、搜索、撤销/重做 |
-| **腾讯思维导图** | Tencent Mind Map Engine | 右键菜单、标记系统（10 种）、协同光标、Yjs 同步 |
+| **旧版思维导图** | React Flow / MindElixir / SimpleMindMap / JsMind / Markmap | 多根节点、跨树连线、分支折叠、Markdown 导入导出、自动布局、搜索、撤销/重做（已停用） |
+| **思维导图** | Tencent Mind Map Engine | 右键菜单、标记系统（10 种）、协同光标、Yjs 同步 |
 | **看板** | 自定义 React | 列 + 卡片拖拽、列排序、删除 3 秒撤回 |
 | **泳道图** | 自定义 React | 水平/垂直泳道、元素拖拽、箭头连线 |
 
@@ -66,7 +66,7 @@
 |-------|-----------|
 | **前端** | React 18, Vite 5, Tailwind CSS, Zustand |
 | **画图** | @excalidraw/excalidraw 0.17.x |
-| **思维导图** | @xyflow/react 12.x, MindElixir 5.x, SimpleMindMap, 腾讯思维导图引擎 |
+| **思维导图** | @xyflow/react 12.x, MindElixir 5.x, SimpleMindMap, Tencent Mind Map Engine |
 | **后端** | Node.js 20, Express 4.x |
 | **ORM** | Sequelize 6.x（SQLite / PostgreSQL） |
 | **协作** | Yjs 13.x, y-websocket 2.x |
@@ -284,7 +284,7 @@ npm run test:e2e     # 需要先启动开发服务器
 ```
 测试用例位于 `test/level1-playwright/specs/`：
 - **思维导图**：协作、切换、功能、基本操作
-- **腾讯思维导图**：协作、基本操作
+- **思维导图**：协作、基本操作
 - **画布**：轮询、结构化画布协作
 - **核心**：认证、仪表盘、编辑器、协作、实时同步
 - **媒体**：媒体上传、拖拽、媒体类型
@@ -329,7 +329,7 @@ test/mixed/
                           Redis pub/sub（多实例支持）
 ```
 
-每种结构化工具（Excalidraw、思维导图、腾讯思维导图、看板、泳道图）都有独立的 Yjs 文档类型，支持独立实时同步。
+每种结构化工具（Excalidraw、思维导图、看板、泳道图）都有独立的 Yjs 文档类型，支持独立实时同步。
 
 ### 权限等级
 ```

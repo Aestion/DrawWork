@@ -391,7 +391,7 @@ test.describe('TencentMind Collaboration', () => {
       await tencentItem.click()
       await pageB.waitForTimeout(500)
     }
-    await pageB.waitForSelector('text=腾讯思维', { timeout: 20000 })
+    await pageB.waitForSelector('text=思维导图', { timeout: 20000 })
     await pageB.waitForSelector('.smm-mind-map-container foreignObject', { timeout: 10000 })
     await pageB.waitForTimeout(2000)
 

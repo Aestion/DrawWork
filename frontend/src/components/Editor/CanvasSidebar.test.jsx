@@ -20,11 +20,11 @@ describe('CanvasSidebar', () => {
 
     const menu = screen.getByText('手绘').closest('div')
     expect(within(menu).getByText('手绘')).toBeInTheDocument()
-    expect(within(menu).getByText('腾讯思维')).toBeInTheDocument()
+    expect(within(menu).getByText('思维导图')).toBeInTheDocument()
     expect(within(menu).getByText('看板')).toBeInTheDocument()
     expect(within(menu).getByText('泳道图')).toBeInTheDocument()
     expect(within(menu).queryByText(/Mind-Map/)).not.toBeInTheDocument()
-    expect(within(menu).queryByText(/思维导图/)).not.toBeInTheDocument()
+    expect(within(menu).queryByText(/旧版思维导图/)).not.toBeInTheDocument()
     expect(menu.querySelectorAll('svg')).toHaveLength(4)
   })
 })
