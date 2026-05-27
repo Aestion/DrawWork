@@ -80,4 +80,39 @@ describe('boardStore', () => {
       expect(result).toBe(false)
     })
   })
+
+  describe('updateBoard', () => {
+    it('updates a board in place', async () => {
+      useBoardStore.setState({
+        boards: [
+          { id: '1', name: 'Old', description: 'old desc', permission: 'owner' },
+          { id: '2', name: 'Other' }
+        ]
+      })
+      mockApi.put.mockResolvedValueOnce({
+        data: { id: '1', name: 'New', description: 'new desc', cover_url: 'https://example.com/a.png' }
+      })
+
+      const result = await useBoardStore.getState().updateBoard('1', {
+        name: 'New',
+        description: 'new desc',
+        cover_url: 'https://example.com/a.png'
+      })
+
+      expect(mockApi.put).toHaveBeenCalledWith('/boards/1', {
+        name: 'New',
+        description: 'new desc',
+        cover_url: 'https://example.com/a.png'
+      })
+      expect(result.name).toBe('New')
+      expect(useBoardStore.getState().boards[0]).toMatchObject({
+        id: '1',
+        name: 'New',
+        description: 'new desc',
+        cover_url: 'https://example.com/a.png',
+        permission: 'owner'
+      })
+      expect(useBoardStore.getState().boards[1].id).toBe('2')
+    })
+  })
 })

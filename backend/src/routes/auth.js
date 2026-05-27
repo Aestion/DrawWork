@@ -129,4 +129,48 @@ router.get('/me', authMiddleware, async (req, res, next) => {
   }
 })
 
+// GET /api/auth/preferences
+router.get('/preferences', authMiddleware, async (req, res, next) => {
+  try {
+    const [profile] = await Profile.findOrCreate({
+      where: { id: req.user.id },
+      defaults: {
+        id: req.user.id,
+        display_name: req.user.username,
+        ui_preferences: {}
+      }
+    })
+
+    res.json(profile.ui_preferences || {})
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/auth/preferences
+router.put('/preferences', authMiddleware, async (req, res, next) => {
+  try {
+    const preferences = req.body?.preferences
+    if (!preferences || Array.isArray(preferences) || typeof preferences !== 'object') {
+      return res.status(400).json({ error: 'preferences must be an object' })
+    }
+
+    const [profile] = await Profile.findOrCreate({
+      where: { id: req.user.id },
+      defaults: {
+        id: req.user.id,
+        display_name: req.user.username,
+        ui_preferences: {}
+      }
+    })
+
+    profile.ui_preferences = preferences
+    await profile.save()
+
+    res.json(profile.ui_preferences || {})
+  } catch (err) {
+    next(err)
+  }
+})
+
 module.exports = router

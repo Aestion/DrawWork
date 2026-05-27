@@ -3,6 +3,7 @@ import {
   applyNodeDataPatch,
   canCompleteAssociativeLineControlDrag,
   canRunAssociativeLineControlDrag,
+  decodeTencentMindSnapshotData,
   normalizeAssociativeLineDataForNode,
   patchAssociativeLineInstance,
   getTencentMindLayout,
@@ -63,6 +64,34 @@ describe('TencentMind format helpers', () => {
       layout: 'fishbone',
       theme: { topic: 'green' }
     })
+  })
+})
+
+describe('decodeTencentMindSnapshotData', () => {
+  it('decodes manual JSON snapshots with Chinese content', () => {
+    const data = {
+      rootTopic: { id: 'root', title: '中文版本' },
+      theme: { topic: 'green' },
+      layout: 'fishbone'
+    }
+    const base64 = btoa(unescape(encodeURIComponent(JSON.stringify(data))))
+
+    expect(decodeTencentMindSnapshotData(base64)).toEqual(data)
+  })
+
+  it('decodes Yjs binary snapshots that store TencentMind data', async () => {
+    const Y = await import('yjs')
+    const data = {
+      rootTopic: { id: 'root', title: 'Yjs 版本' },
+      theme: { topic: 'blue' }
+    }
+    const doc = new Y.Doc()
+    doc.getMap('tencentmind').set('__tencent_state', data)
+    const update = Y.encodeStateAsUpdate(doc)
+    const base64 = btoa(String.fromCharCode(...update))
+    doc.destroy()
+
+    expect(decodeTencentMindSnapshotData(base64)).toEqual(data)
   })
 })
 

@@ -8,7 +8,12 @@ module.exports = (sequelize, DataTypes) => {
     display_name: DataTypes.STRING(100),
     avatar_url: DataTypes.TEXT,
     department: DataTypes.STRING(100),
-    phone: DataTypes.STRING(20)
+    phone: DataTypes.STRING(20),
+    ui_preferences: {
+      type: DataTypes.JSON,
+      allowNull: false,
+      defaultValue: {}
+    }
   }, {
     tableName: 'profiles',
     timestamps: true,

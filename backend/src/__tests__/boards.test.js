@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test'
 
 const request = require('supertest')
 const app = require('../app')
-const { sequelize, User, Board, Canvas } = require('../models')
+const { sequelize, User, Board, Canvas, BoardShare } = require('../models')
 const { hashPassword, generateUniqueEmail } = require('./helpers')
 
 const USER_EMAIL = generateUniqueEmail('board')
@@ -74,6 +74,53 @@ describe('Boards API', () => {
       expect(res.body[0]).toHaveProperty('canvas_count')
       expect(res.body[0]).toHaveProperty('permission')
     })
+
+    it('should return creator name and created time for board cards', async () => {
+      const res = await request(app)
+        .get('/api/boards')
+        .set('Authorization', `Bearer ${authToken}`)
+
+      expect(res.status).toBe(200)
+      expect(res.body[0]).toHaveProperty('created_at')
+      expect(res.body[0].owner_id).toBe(testUser.id)
+      expect(res.body[0].owner_name).toBe(testUser.username)
+    })
+
+    it('should identify owned, shared, and public board sources', async () => {
+      const otherUser = await User.create({
+        username: 'source-owner',
+        email: generateUniqueEmail('source-owner'),
+        password_hash: await hashPassword('pass')
+      })
+      const sharedBoard = await Board.create({
+        owner_id: otherUser.id,
+        name: 'Shared Source Board'
+      })
+      const publicBoard = await Board.create({
+        owner_id: otherUser.id,
+        name: 'Public Source Board',
+        is_public: true
+      })
+      await BoardShare.create({
+        board_id: sharedBoard.id,
+        user_id: testUser.id,
+        permission: 'viewer',
+        invited_by: otherUser.id,
+        source: 'invite'
+      })
+
+      const res = await request(app)
+        .get('/api/boards')
+        .set('Authorization', `Bearer ${authToken}`)
+
+      expect(res.status).toBe(200)
+      const byName = Object.fromEntries(res.body.map(board => [board.name, board]))
+      expect(byName['Test Board'].access_type).toBe('owned')
+      expect(byName['Shared Source Board'].access_type).toBe('shared')
+      expect(byName['Shared Source Board'].share_source).toBe('invite')
+      expect(byName['Public Source Board'].access_type).toBe('public')
+      expect(byName['Public Source Board'].share_source).toBeNull()
+    })
   })
 
   describe('PUT /api/boards/:id', () => {
@@ -86,6 +133,16 @@ describe('Boards API', () => {
       expect(res.status).toBe(200)
       expect(res.body.name).toBe('Updated Board')
       expect(res.body.description).toBe('Updated desc')
+    })
+
+    it('should update board cover url', async () => {
+      const res = await request(app)
+        .put(`/api/boards/${testBoard.id}`)
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({ cover_url: 'https://example.com/cover.png' })
+
+      expect(res.status).toBe(200)
+      expect(res.body.cover_url).toBe('https://example.com/cover.png')
     })
   })
 

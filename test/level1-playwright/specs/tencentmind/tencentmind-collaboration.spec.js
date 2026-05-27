@@ -20,7 +20,7 @@ async function waitForTencentMindData(api, canvasId, token, predicate, timeout =
     if (lastData && predicate(lastData)) return lastData
     await new Promise(resolve => setTimeout(resolve, 500))
   }
-  throw new Error(`Timed out waiting for TencentMind data. Last data: ${JSON.stringify(lastData)?.slice(0, 1000)}`)
+  throw new Error(`Timed out waiting for TencentMind data. Last data: ${JSON.stringify(lastData)?.slice(0, 5000)}`)
 }
 
 async function getAdvancedFeatureState(page) {
@@ -197,6 +197,27 @@ async function renameRootChildFromPage(page, childIndex, nodeName) {
   }, { childIndex, name: nodeName })
 }
 
+async function ensureRootChildCount(page, expectedCount) {
+  await page.evaluate((count) => {
+    const mm = window.__mm
+    if (!mm) throw new Error('mind map not found')
+    const data = JSON.parse(JSON.stringify(mm.getData()))
+    data.children = Array.isArray(data.children) ? data.children : []
+    while (data.children.length < count) {
+      const nextIndex = data.children.length + 1
+      data.children.push({
+        data: { text: `子节点 ${nextIndex}` },
+        children: []
+      })
+    }
+    mm.setData(data)
+    mm.emit('data_change')
+  }, expectedCount)
+  await expect.poll(() => page.evaluate(() => window.__mm?.renderer?.renderTree?.children?.length || 0), {
+    timeout: 5000
+  }).toBeGreaterThanOrEqual(expectedCount)
+}
+
 async function setRootChildMediaFromPage(page, childIndex, media) {
   await page.evaluate(({ childIndex, media }) => {
     const mm = window.__mm
@@ -280,26 +301,26 @@ test.describe('TencentMind Collaboration', () => {
     await contextB?.close()
   })
 
-  // ─── 1. Both users see the same initial mind map ────────────────────
+  // 1. Both users see the same initial mind map.
 
   test('both users see the same initial mind map', async () => {
-    const rootA = pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: 'EE2' }).first()
-    const rootB = pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: 'EE2' }).first()
+    const rootA = pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: '中心主题' }).first()
+    const rootB = pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: '中心主题' }).first()
     await expect(rootA).toBeVisible({ timeout: 10000 })
     await expect(rootB).toBeVisible({ timeout: 10000 })
 
-    await expect(pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: '战斗方式' }).first()).toBeVisible({ timeout: 5000 })
-    await expect(pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: '战斗方式' }).first()).toBeVisible({ timeout: 5000 })
+    await expect(pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: '子节点' }).first()).toBeVisible({ timeout: 5000 })
+    await expect(pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: '子节点' }).first()).toBeVisible({ timeout: 5000 })
   })
 
-  // ─── 2. Real-time sync: A adds child via mind map API, B sees it ───
+  // 2. Real-time sync: A adds child via mind map API, B sees it.
 
   test('real-time sync: user A adds a child node, user B sees it without refresh', async () => {
     // Verify both see initial data
-    await expect(pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: 'EE2' }).first()).toBeVisible({ timeout: 10000 })
+    await expect(pageB.locator('.smm-mind-map-container foreignObject').filter({ hasText: '中心主题' }).first()).toBeVisible({ timeout: 10000 })
 
     // User A: click root node, then use mind map API to add a child
-    const rootA = pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: 'EE2' }).first()
+    const rootA = pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: '中心主题' }).first()
     await rootA.click()
     await pageA.waitForTimeout(300)
 
@@ -320,7 +341,7 @@ test.describe('TencentMind Collaboration', () => {
     await expect.poll(() => hasMindText(pageB, nodeName), { timeout: 20000 }).toBeTruthy()
   })
 
-  // ─── 3. Data persists after refresh ──────────────────────────────────
+  // 3. Data persists after refresh.
 
   test('remote text edits update B without rebuilding the whole mind map', async () => {
     await pageA.waitForTimeout(4500)
@@ -346,7 +367,7 @@ test.describe('TencentMind Collaboration', () => {
 
   test('data persists: user A edits, user B refreshes and sees data', async () => {
     // User A: add a child node via mind map API
-    const rootA = pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: 'EE2' }).first()
+    const rootA = pageA.locator('.smm-mind-map-container foreignObject').filter({ hasText: '中心主题' }).first()
     await rootA.click()
     await pageA.waitForTimeout(300)
 
@@ -380,6 +401,7 @@ test.describe('TencentMind Collaboration', () => {
 
   test('advanced features sync and persist: markers, summaries, boundaries, and associative lines', async ({ request: api }) => {
     await pageA.waitForTimeout(4500)
+    await ensureRootChildCount(pageA, 2)
     const summaryText = `Summary-${Date.now()}`
 
     await pageA.evaluate((text) => {
@@ -458,6 +480,7 @@ test.describe('TencentMind Collaboration', () => {
     await expect.poll(() => hasMindText(pageB, firstName), { timeout: 20000 }).toBeTruthy()
     await pageA.waitForTimeout(1000)
 
+    await ensureRootChildCount(pageA, 2)
     const secondName = `EchoSecond-${Date.now()}`
     await renameRootChildFromPage(pageA, 1, secondName)
 
@@ -483,6 +506,7 @@ test.describe('TencentMind Collaboration', () => {
 
   test('line text and node media sync and persist between collaborators', async ({ request: api }) => {
     await pageA.waitForTimeout(4500)
+    await ensureRootChildCount(pageA, 2)
     const lineTitle = `LineTitle-${Date.now()}`
     const uploadId = await uploadTinyPng(api, env.board.id, env.token)
 
@@ -543,6 +567,7 @@ test.describe('TencentMind Collaboration', () => {
 
   test('gif media syncs immediately before a later video edit', async ({ request: api }) => {
     await pageA.waitForTimeout(4500)
+    await ensureRootChildCount(pageA, 2)
     const gifBuffer = Buffer.from([
       0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00,
       0x01, 0x00, 0x80, 0x00, 0x00, 0xff, 0x00, 0xff,

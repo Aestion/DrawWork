@@ -57,6 +57,27 @@ export function withTencentMindFormat(data, { layout, theme } = {}) {
   return next
 }
 
+export function decodeTencentMindSnapshotData(base64Data) {
+  if (!base64Data) return null
+  const binary = atob(base64Data)
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+
+  try {
+    const jsonStr = new TextDecoder().decode(bytes)
+    const data = JSON.parse(jsonStr)
+    return data?.rootTopic ? data : null
+  } catch {
+    const doc = new Y.Doc()
+    try {
+      Y.applyUpdate(doc, bytes)
+      const data = doc.getMap('tencentmind').toJSON().__tencent_state
+      return data?.rootTopic ? data : null
+    } finally {
+      doc.destroy()
+    }
+  }
+}
+
 const VIDEO_PLACEHOLDER = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#e2e8f0" rx="6"/><circle cx="60" cy="40" r="16" fill="#64748b"/><polygon points="54,32 54,48 66,40" fill="#fff"/></svg>')
 const INITIAL_DATA_CHANGE_SUPPRESS_MS = 800
 const REMOTE_DATA_CHANGE_SUPPRESS_MS = 5000
@@ -1279,6 +1300,15 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
           theme: mmRef.current.getTheme?.() || currentTheme
         }
       )
+      const uidToTencentId = new Map()
+      const indexTencentIds = (simpleNode, tencentNode) => {
+        const uid = simpleNode?.data?.uid
+        if (uid && tencentNode?.id) uidToTencentId.set(uid, tencentNode.id)
+        const simpleChildren = simpleNode?.children || []
+        const tencentChildren = tencentNode?.children?.attached || []
+        simpleChildren.forEach((child, index) => indexTencentIds(child, tencentChildren[index]))
+      }
+      indexTencentIds(currentData, tencentData.rootTopic)
 
       // Persist associative lines as Tencent relationships (always overwrite)
       const lineList = mmRef.current.associativeLine?.lineList || []
@@ -1286,12 +1316,12 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       for (const line of lineList) {
         const fromNode = line[3]
         const toNode = line[4]
-        const fromId = fromNode?.nodeData?.data?._tencentMeta?.id
-        const toId = toNode?.nodeData?.data?._tencentMeta?.id
+        const fromUid = fromNode.getData?.('uid')
+        const toUid = toNode.getData?.('uid')
+        const fromId = fromNode?.nodeData?.data?._tencentMeta?.id || uidToTencentId.get(fromUid)
+        const toId = toNode?.nodeData?.data?._tencentMeta?.id || uidToTencentId.get(toUid)
         if (fromId && toId) {
           // Capture bezier control points, endpoints, and style from node data
-          const fromUid = fromNode.getData?.('uid')
-          const toUid = toNode.getData?.('uid')
           const targets = fromNode.getData?.('associativeLineTargets') || []
           const targetIndex = targets.indexOf(toUid)
 
@@ -1391,37 +1421,52 @@ const TencentMindEditor = forwardRef(function TencentMindEditor({ canvasId, room
       const json = JSON.stringify(originDataRef.current)
       return btoa(unescape(encodeURIComponent(json)))
     },
-    loadData(base64Data) {
+    async loadData(base64Data) {
       try {
-        const binary = atob(base64Data)
-        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+        const data = decodeTencentMindSnapshotData(base64Data)
+        if (!data) {
+          console.error('[TencentMind] Invalid snapshot data: missing rootTopic')
+          return false
+        }
+        const snapshot = JSON.stringify(data)
+        originDataRef.current = data
+        lastAppliedRemoteSnapshotRef.current = snapshot
+        lastAppliedRemoteComparableSnapshotRef.current = comparableTencentMindSnapshot(data)
+        lastSavedSnapshotRef.current = snapshot
+        lastSavedComparableSnapshotRef.current = lastAppliedRemoteComparableSnapshotRef.current
+        hasPendingLocalSaveRef.current = false
 
-        // Try JSON first (manual saves), then Yjs binary (auto-saves)
-        let data
-        try {
-          const jsonStr = new TextDecoder().decode(bytes)
-          data = JSON.parse(jsonStr)
-        } catch {
-          const doc = new Y.Doc()
-          try {
-            Y.applyUpdate(doc, bytes)
-            data = doc.getMap('tencentmind').toJSON().__tencent_state
-          } finally {
-            doc.destroy()
+        const restoredLayout = getTencentMindLayout(data)
+        const restoredTheme = getTencentMindTheme(data)
+        setCurrentLayout(restoredLayout)
+        setCurrentTheme(restoredTheme)
+        if (mmRef.current) {
+          mmRef.current.setLayout?.(restoredLayout)
+          mmRef.current.setTheme?.(restoredTheme)
+          const smmData = tencentToSimpleMindMap(data)
+          const appliedInPlace = applyRemoteDataInPlace(mmRef.current, smmData, data)
+          if (!appliedInPlace) {
+            mmRef.current.setData(smmData)
+            mmRef.current.render(() => {
+              overlaySimpleNodeDataByTencentId(mmRef.current, smmData)
+              try { restoreAssociativeLines(mmRef.current, data) } catch (e) { console.error('Snapshot restore associative lines:', e) }
+              try { restoreGeneralizations(mmRef.current, data) } catch (e) { console.error('Snapshot restore generalizations:', e) }
+              try { restoreBoundaries(mmRef.current, data) } catch (e) { console.error('Snapshot restore boundaries:', e) }
+              try { restoreAllMarkers(mmRef.current, data) } catch (e) { console.error('Snapshot restore markers:', e) }
+              restoreNodeMedia(mmRef.current).catch(e => console.error('Snapshot restore media:', e))
+            })
           }
         }
 
-        if (!data || !data.rootTopic) {
-          console.error('[TencentMind] Invalid snapshot data: missing rootTopic')
-          return
-        }
-        originDataRef.current = data
+        await api.put(`/canvases/${canvasId}/tencentmind`, { data })
         syncToYjs(data, 'restore-snapshot')
+        return true
       } catch (err) {
         console.error('[TencentMind] Failed to load snapshot:', err)
+        return false
       }
     }
-  }), [syncToYjs])
+  }), [canvasId, syncToYjs])
 
   const handleLayoutChange = useCallback((layout) => {
     setCurrentLayout(layout)

@@ -23,6 +23,36 @@ test.describe('TencentMind Editor', () => {
 
     // Should see the readonly checkbox
     await expect(page.locator('text=只读')).toBeVisible()
+
+    await expect(page.locator('.smm-mind-map-container foreignObject').filter({ hasText: '中心主题' }).first()).toBeVisible()
+    await expect(page.locator('.smm-mind-map-container foreignObject').filter({ hasText: '子节点' }).first()).toBeVisible()
+  })
+
+  test('automatic root child insertion keeps both sides balanced', async ({ page }) => {
+    await navigateToTencentMind(page, env.board.id)
+    await waitForRender(page)
+
+    await page.evaluate(() => {
+      const mm = window.__mm
+      if (!mm) throw new Error('mind map not found')
+      const root = mm.renderer.renderTree?._node || mm.renderer.renderTree
+      if (!root) throw new Error('root node not found')
+      for (let i = 0; i < 4; i++) {
+        mm.execCommand('INSERT_CHILD_NODE', false, [root], { text: `新增节点 ${i + 1}` })
+      }
+      mm.emit('data_change')
+    })
+
+    await expect.poll(() => page.evaluate(() => {
+      const root = window.__mm?.renderer?.renderTree
+      return {
+        rightNumber: root?.data?.rightNumber,
+        dirs: (root?.children || []).map(child => child?._node?.data?.dir || child?.data?.dir)
+      }
+    }), { timeout: 10000 }).toEqual({
+      rightNumber: 3,
+      dirs: ['right', 'right', 'right', 'left', 'left']
+    })
   })
 
   // ============================================================

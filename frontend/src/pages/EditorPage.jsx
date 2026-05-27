@@ -99,9 +99,9 @@ export default function EditorPage() {
     try {
       let base64
       if (currentCanvas.type === 'excalidraw') {
-        base64 = excalidrawRef.current.getSnapshotData()
+        base64 = excalidrawRef.current?.getSnapshotData?.()
       } else if (currentCanvas.type === 'tencentmind') {
-        base64 = tencentMindRef.current.getSnapshotData()
+        base64 = tencentMindRef.current?.getSnapshotData?.()
       } else {
         return
       }
@@ -117,9 +117,9 @@ export default function EditorPage() {
     if (DISABLED_CANVAS_TYPES.has(currentCanvas.type)) return
     const res = await api.get(`/canvases/${currentCanvas.id}/snapshots/${snapshotId}`)
     if (currentCanvas.type === 'excalidraw') {
-      excalidrawRef.current.loadData(res.data.data)
+      await excalidrawRef.current?.loadData?.(res.data.data)
     } else if (currentCanvas.type === 'tencentmind') {
-      tencentMindRef.current.loadData(res.data.data)
+      await tencentMindRef.current?.loadData?.(res.data.data)
     }
   }
 

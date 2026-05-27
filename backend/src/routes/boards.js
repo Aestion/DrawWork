@@ -19,7 +19,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
     // 获取用户有权限访问的画板ID列表
     const shares = await BoardShare.findAll({
       where: { user_id: userId },
-      attributes: ['board_id', 'permission']
+      attributes: ['board_id', 'permission', 'source']
     })
     const sharedBoardIds = shares.map(s => s.board_id)
 
@@ -34,7 +34,8 @@ router.get('/', authMiddleware, async (req, res, next) => {
       },
       include: [
         { model: Canvas, where: { is_deleted: false }, required: false },
-        { model: BoardVisit, where: { user_id: userId }, required: false }
+        { model: BoardVisit, where: { user_id: userId }, required: false },
+        { model: User, as: 'owner', attributes: ['id', 'username'] }
       ],
       order: [['updated_at', 'DESC']]
     })
@@ -45,6 +46,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
       let permission = 'viewer'
       if (isOwner) permission = 'owner'
       else if (share) permission = share.permission
+      const accessType = isOwner ? 'owned' : (share ? 'shared' : 'public')
 
       return {
         id: board.id,
@@ -52,11 +54,15 @@ router.get('/', authMiddleware, async (req, res, next) => {
         description: board.description,
         cover_url: board.cover_url,
         is_public: board.is_public,
+        owner_id: board.owner_id,
+        owner_name: board.owner?.username || null,
         canvas_count: board.Canvases?.length || 0,
         permission,
+        access_type: accessType,
+        share_source: share?.source || null,
         last_visited: board.BoardVisits?.[0]?.visited_at || null,
-        created_at: board.created_at,
-        updated_at: board.updated_at
+        created_at: board.createdAt,
+        updated_at: board.updatedAt
       }
     })
 
@@ -109,9 +115,10 @@ router.post('/', authMiddleware, async (req, res, next) => {
       is_public: board.is_public,
       cover_url: board.cover_url,
       owner_id: board.owner_id,  // Include owner_id for permission check
+      owner_name: req.user.username,
       permission: 'owner',  // Creator is always owner
-      created_at: board.created_at,
-      updated_at: board.updated_at,
+      created_at: board.createdAt,
+      updated_at: board.updatedAt,
       canvases: [{
         id: canvas.id,
         name: canvas.name,
@@ -142,6 +149,7 @@ router.get('/:id', authMiddleware, checkBoardPermission('viewer'), async (req, r
       where: { board_id: boardId, is_revoked: false },
       order: [['created_at', 'DESC']]
     })
+    const owner = await User.findByPk(req.board.owner_id, { attributes: ['username'] })
 
     res.json({
       id: req.board.id,
@@ -151,6 +159,7 @@ router.get('/:id', authMiddleware, checkBoardPermission('viewer'), async (req, r
       cover_url: req.board.cover_url,
       permission: req.permission,
       owner_id: req.board.owner_id,
+      owner_name: owner?.username || null,
       is_owner: isOwner,
       shares: shares.map(s => ({
         user_id: s.user_id,
@@ -166,8 +175,8 @@ router.get('/:id', authMiddleware, checkBoardPermission('viewer'), async (req, r
         used_count: t.used_count,
         created_at: t.created_at
       })),
-      created_at: req.board.created_at,
-      updated_at: req.board.updated_at
+      created_at: req.board.createdAt,
+      updated_at: req.board.updatedAt
     })
   } catch (err) {
     next(err)
@@ -203,7 +212,8 @@ router.put('/:id', authMiddleware, checkBoardPermission('editor'), requirePermis
       description: board.description,
       is_public: board.is_public,
       cover_url: board.cover_url,
-      updated_at: board.updated_at
+      owner_id: board.owner_id,
+      updated_at: board.updatedAt
     })
   } catch (err) {
     next(err)

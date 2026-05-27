@@ -98,4 +98,60 @@ describe('Auth API', () => {
       expect(res.status).toBe(401)
     })
   })
+
+  describe('GET/PUT /api/auth/preferences', () => {
+    it('should persist dashboard preferences per user', async () => {
+      const login = await request(app)
+        .post('/api/auth/login')
+        .send({ email: USER_EMAIL, password: 'pass' })
+
+      const defaults = await request(app)
+        .get('/api/auth/preferences')
+        .set('Authorization', `Bearer ${login.body.token}`)
+
+      expect(defaults.status).toBe(200)
+      expect(defaults.body).toEqual({})
+
+      const preferences = {
+        dashboard: {
+          viewMode: 'list',
+          sortMode: 'name',
+          groupNames: {
+            owned: '项目画板',
+            shared: '协作项目',
+            public: '内网共享'
+          }
+        }
+      }
+
+      const saved = await request(app)
+        .put('/api/auth/preferences')
+        .set('Authorization', `Bearer ${login.body.token}`)
+        .send({ preferences })
+
+      expect(saved.status).toBe(200)
+      expect(saved.body).toEqual(preferences)
+
+      const loaded = await request(app)
+        .get('/api/auth/preferences')
+        .set('Authorization', `Bearer ${login.body.token}`)
+
+      expect(loaded.status).toBe(200)
+      expect(loaded.body).toEqual(preferences)
+    })
+
+    it('should not share preferences between users', async () => {
+      const secondEmail = generateUniqueEmail('prefs')
+      const secondRegister = await request(app)
+        .post('/api/auth/register')
+        .send({ username: 'prefsuser', email: secondEmail, password: 'password123' })
+
+      const res = await request(app)
+        .get('/api/auth/preferences')
+        .set('Authorization', `Bearer ${secondRegister.body.token}`)
+
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({})
+    })
+  })
 })

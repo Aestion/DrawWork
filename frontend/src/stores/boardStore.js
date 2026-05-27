@@ -27,6 +27,21 @@ export const useBoardStore = create((set, get) => ({
     }
   },
 
+  updateBoard: async (id, data) => {
+    try {
+      const res = await api.put(`/boards/${id}`, data)
+      set({
+        boards: get().boards.map(board =>
+          board.id === id ? { ...board, ...res.data } : board
+        )
+      })
+      return res.data
+    } catch (err) {
+      set({ error: err.response?.data?.error || '更新画板失败' })
+      return null
+    }
+  },
+
   deleteBoard: async (id) => {
     try {
       await api.delete(`/boards/${id}`)

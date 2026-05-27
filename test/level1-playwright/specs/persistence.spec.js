@@ -101,8 +101,8 @@ test.describe('Data Persistence', () => {
     await openBoard(page, boardName);
 
     // Create a second canvas
-    await page.click('text=+ 新建');
-    await page.locator('text=✏️ 手绘').click();
+    await page.getByRole('button', { name: '+ 新建' }).click();
+    await page.getByRole('button', { name: '手绘' }).click();
 
     // Wait for the new canvas to appear in sidebar
     await expect(page.locator('text=画布 2')).toBeVisible({ timeout: 5000 });

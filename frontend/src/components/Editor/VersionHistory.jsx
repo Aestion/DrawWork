@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import api from '../../lib/axios'
 
-function formatTime(dateStr) {
+export function formatVersionTime(dateStr) {
   if (!dateStr) return '当前版本'
   const date = new Date(dateStr)
   const now = new Date()
@@ -45,7 +45,6 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
     fetchSnapshots()
   }, [canvasId])
 
-  // Focus input when naming appears
   useEffect(() => {
     if (showNaming && inputRef.current) {
       inputRef.current.focus()
@@ -85,7 +84,7 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
   }
 
   const handleRestore = async (snapshotId) => {
-    if (restoringId) return
+    if (!onRestore || restoringId) return
     if (!confirm('确定要恢复到此版本吗？当前未保存的内容将丢失。')) return
     setRestoringId(snapshotId)
     setError('')
@@ -122,13 +121,11 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
   return (
     <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" role="dialog" aria-modal="true" onKeyDown={e => e.key === 'Escape' && onClose?.()} onClick={onClose} tabIndex={-1}>
       <div className="bg-white rounded-xl shadow-2xl w-[420px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <h2 className="text-base font-semibold text-gray-800">版本历史</h2>
           <button aria-label="关闭" onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
         </div>
 
-        {/* Naming input (shown when saving) */}
         {showNaming && (
           <div className="px-5 pt-3 pb-2 border-b">
             <label htmlFor="version-name" className="text-xs text-gray-500 mb-1 block">为当前版本命名：</label>
@@ -160,7 +157,6 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
           </div>
         )}
 
-        {/* Save button (hidden when naming is open or onSave is null) */}
         {onSave && !showNaming && (
           <div className="px-5 pt-3">
             <button
@@ -172,14 +168,12 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
           </div>
         )}
 
-        {/* Error */}
         {error && (
           <div className="mx-5 mt-3 px-3 py-2 bg-red-50 text-red-600 text-xs rounded border border-red-200">
             {error}
           </div>
         )}
 
-        {/* Snapshot list */}
         <div className="flex-1 overflow-y-auto px-5 py-3">
           {loading ? (
             <div className="text-center py-8 text-gray-400 text-sm">加载中...</div>
@@ -203,10 +197,9 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      {/* Left: name/time */}
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-gray-700">
-                          {s.name || formatTime(s.created_at)}
+                          {s.name || formatVersionTime(s.created_at)}
                         </div>
                         <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
                           {isAuto ? (
@@ -214,11 +207,10 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
                           ) : s.created_by?.username ? (
                             <span>{s.created_by.username}</span>
                           ) : null}
-                          <span>{formatTime(s.created_at)}</span>
+                          <span>{formatVersionTime(s.created_at)}</span>
                         </div>
                       </div>
 
-                      {/* Right: current badge / restore button */}
                       <div className="flex items-center gap-2">
                         {isLatest ? (
                           <span className="text-xs text-green-600 bg-green-50 px-2.5 py-1 rounded-full font-medium whitespace-nowrap">
@@ -236,7 +228,6 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
                       </div>
                     </div>
 
-                    {/* Delete button (manual saves only, appears on hover) */}
                     {!isAuto && (
                       <div className="mt-2 pt-2 border-t border-gray-100 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
@@ -244,7 +235,7 @@ export default function VersionHistory({ canvasId, onClose, onSave, onRestore, o
                           disabled={isDeleting}
                           className="text-xs text-red-500 hover:text-red-600 disabled:opacity-50 flex items-center gap-1"
                         >
-                          {isDeleting ? '删除中...' : '🗑️ 删除此版本'}
+                          {isDeleting ? '删除中...' : '删除此版本'}
                         </button>
                       </div>
                     )}

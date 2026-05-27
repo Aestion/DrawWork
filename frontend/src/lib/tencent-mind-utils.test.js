@@ -6,7 +6,19 @@ describe('tencent-mind-utils', () => {
     it('should convert Tencent format to simple-mind-map format', () => {
       const result = tencentToSimpleMindMap(DEFAULT_TENCENT_MIND)
       expect(result).toHaveProperty('data')
-      expect(result.data).toHaveProperty('text', 'EE2')
+      expect(result.data).toHaveProperty('text', '中心主题')
+    })
+
+    it('should keep the default TencentMind template minimal', () => {
+      const result = tencentToSimpleMindMap(DEFAULT_TENCENT_MIND)
+
+      expect(result.data.text).toBe('中心主题')
+      expect(result.children).toHaveLength(1)
+      expect(result.children[0].data.text).toBe('子节点')
+      expect(result.children[0].children || []).toHaveLength(0)
+      expect(DEFAULT_TENCENT_MIND.relationships).toEqual([])
+      expect(JSON.stringify(DEFAULT_TENCENT_MIND)).not.toContain('EE2')
+      expect(JSON.stringify(DEFAULT_TENCENT_MIND)).not.toContain('RPG')
     })
 
     it('should handle null/undefined input gracefully', () => {
@@ -540,7 +552,7 @@ describe('tencent-mind-utils', () => {
       expect(result.rootTopic.id).toBe(tencentData.rootTopic.id)
 
       // Root topic should have the same text
-      expect(result.rootTopic.title.children[0].children[0].text).toBe('EE2')
+      expect(result.rootTopic.title.children[0].children[0].text).toBe('中心主题')
     })
 
     it('should preserve relationships through round-trip', () => {
