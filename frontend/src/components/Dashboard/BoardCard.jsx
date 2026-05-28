@@ -1,4 +1,6 @@
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import api from '../../lib/axios'
 import { PERMISSION_LABELS } from '../../lib/constants'
 
 function formatDate(dateStr) {
@@ -12,9 +14,39 @@ function formatDate(dateStr) {
 
 function BoardCover({ url, compact = false }) {
   const fallbackSize = compact ? 'w-12 h-12' : 'w-16 h-16'
+  const [src, setSrc] = useState('')
+  const blobUrlRef = useRef(null)
 
-  if (url) {
-    return <img src={url} alt="" className="w-full h-full object-cover" />
+  useEffect(() => {
+    if (!url) {
+      setSrc('')
+      return
+    }
+    if (!url.startsWith('/api/upload/')) {
+      setSrc(url)
+      return
+    }
+    let cancelled = false
+    api.get(url.replace(/^\/api/, ''), { responseType: 'blob' }).then((res) => {
+      if (cancelled) return
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current)
+      const blobUrl = URL.createObjectURL(res.data)
+      blobUrlRef.current = blobUrl
+      setSrc(blobUrl)
+    }).catch(() => {
+      if (!cancelled) setSrc('')
+    })
+    return () => { cancelled = true }
+  }, [url])
+
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current)
+    }
+  }, [])
+
+  if (src) {
+    return <img src={src} alt="" className="w-full h-full object-cover" />
   }
 
   return (

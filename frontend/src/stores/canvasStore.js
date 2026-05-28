@@ -14,11 +14,15 @@ export const useCanvasStore = create((set, get) => ({
       const current = get().currentCanvas
       const savedId = localStorage.getItem(`lastCanvas:${boardId}`)
       const matched = res.data.find(c => c.id === current?.id)
+      const saved = res.data.find(c => c.id === savedId)
       // Preserve currentCanvas reference when the active canvas still exists
       // (prevents unnecessary prop changes during polling that could disrupt editing)
       const nextCurrent = matched
         ? current
-        : res.data.find(c => c.id === savedId) || res.data[0] || null
+        : saved || res.data[0] || null
+      if (savedId && !saved) {
+        localStorage.removeItem(`lastCanvas:${boardId}`)
+      }
       if (nextCurrent && nextCurrent.id !== current?.id) {
         localStorage.setItem(`lastCanvas:${boardId}`, nextCurrent.id)
       }
@@ -56,10 +60,19 @@ export const useCanvasStore = create((set, get) => ({
   deleteCanvas: async (id) => {
     try {
       await api.delete(`/canvases/${id}`)
+      const deleted = get().canvases.find(c => c.id === id)
       const remaining = get().canvases.filter(c => c.id !== id)
+      const nextCurrent = get().currentCanvas?.id === id ? remaining[0] || null : get().currentCanvas
+      if (deleted?.board_id) {
+        if (nextCurrent) {
+          localStorage.setItem(`lastCanvas:${deleted.board_id}`, nextCurrent.id)
+        } else {
+          localStorage.removeItem(`lastCanvas:${deleted.board_id}`)
+        }
+      }
       set({
         canvases: remaining,
-        currentCanvas: get().currentCanvas?.id === id ? remaining[0] || null : get().currentCanvas
+        currentCanvas: nextCurrent
       })
       return true
     } catch (err) {

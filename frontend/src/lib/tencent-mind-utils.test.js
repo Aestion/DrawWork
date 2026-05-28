@@ -187,6 +187,34 @@ describe('tencent-mind-utils', () => {
       expect(result.theme).toBeDefined()
     })
 
+    it('should save root child sides using right-number and right-first order', () => {
+      const smmData = {
+        data: {
+          text: 'Root',
+          _tencentMeta: {
+            id: 'root',
+            extensions: {
+              'structureClass.unbalanced': {
+                'right-number': 1
+              }
+            },
+            structureClass: 'unbalanced'
+          }
+        },
+        children: [
+          { data: { text: '左 1', dir: 'left', _tencentMeta: { id: 'l1' } }, children: [] },
+          { data: { text: '右 1', dir: 'right', _tencentMeta: { id: 'r1' } }, children: [] },
+          { data: { text: '右 2', dir: 'right', _tencentMeta: { id: 'r2' } }, children: [] },
+          { data: { text: '左 2', dir: 'left', _tencentMeta: { id: 'l2' } }, children: [] }
+        ]
+      }
+
+      const result = simpleMindMapToTencent(smmData, DEFAULT_TENCENT_MIND)
+
+      expect(result.rootTopic.extensions['structureClass.unbalanced']['right-number']).toBe(2)
+      expect(result.rootTopic.children.attached.map(child => child.id)).toEqual(['r1', 'r2', 'l1', 'l2'])
+    })
+
     it('should reconstruct boundaries from outerFrame data', () => {
       const smmData = {
         data: { text: 'Root', _tencentMeta: { id: 'root' } },

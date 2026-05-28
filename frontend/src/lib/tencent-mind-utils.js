@@ -382,8 +382,9 @@ export function simpleMindMapToTencent(smmData, origTencentData) {
     delete rootMeta.extensions['drawwork.media']
     if (Object.keys(rootMeta.extensions).length === 0) delete rootMeta.extensions
   }
-  const children = smmData.children
-    ? smmData.children.map(c => convertBack(c, null))
+  const orderedChildren = orderRootChildrenForUnbalancedLayout(smmData.children || [])
+  const children = orderedChildren.length
+    ? orderedChildren.map(c => convertBack(c, null))
     : []
 
   // Reconstruct boundaries at root level from children's outerFrame data
@@ -409,6 +410,7 @@ export function simpleMindMapToTencent(smmData, origTencentData) {
   }
 
   const rootTopic = rebuildNode(smmData.data?.text || '', rootMeta, children)
+  applyUnbalancedRootMeta(rootTopic, orderedChildren)
 
   // Inject root media data
   const rootUploadId = smmData.data?._uploadId
@@ -479,4 +481,22 @@ export const DEFAULT_TENCENT_MIND = {
   theme: {
     topic: 'default'
   }
+}
+
+function orderRootChildrenForUnbalancedLayout(children) {
+  if (!children?.length) return []
+  const rightChildren = children.filter(child => child.data?.dir === 'right')
+  const leftChildren = children.filter(child => child.data?.dir === 'left')
+  if (rightChildren.length + leftChildren.length !== children.length) return children
+  return [...rightChildren, ...leftChildren]
+}
+
+function applyUnbalancedRootMeta(rootTopic, orderedChildren) {
+  const rightNumber = orderedChildren.filter(child => child.data?.dir === 'right').length
+  rootTopic.extensions = rootTopic.extensions || {}
+  rootTopic.extensions['structureClass.unbalanced'] = {
+    ...(rootTopic.extensions['structureClass.unbalanced'] || {}),
+    'right-number': rightNumber
+  }
+  rootTopic.structureClass = 'unbalanced'
 }

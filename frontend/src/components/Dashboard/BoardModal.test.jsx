@@ -5,7 +5,8 @@ import api from '../../lib/axios'
 
 vi.mock('../../lib/axios', () => ({
   default: {
-    post: vi.fn()
+    post: vi.fn(),
+    get: vi.fn()
   }
 }))
 
@@ -26,6 +27,7 @@ describe('BoardModal', () => {
     const onUpdate = vi.fn().mockResolvedValue({})
     const onClose = vi.fn()
     api.post.mockResolvedValue({ data: { id: 'upload-1', url: '/api/upload/upload-1' } })
+    api.get.mockResolvedValue({ data: new Blob(['png'], { type: 'image/png' }) })
 
     render(
       <BoardModal

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import api from '../../lib/axios'
 
 export default function BoardModal({ board, onClose, onCreate, onUpdate }) {
@@ -6,9 +6,41 @@ export default function BoardModal({ board, onClose, onCreate, onUpdate }) {
   const [name, setName] = useState(board?.name || '')
   const [description, setDescription] = useState(board?.description || '')
   const [coverUrl, setCoverUrl] = useState(board?.cover_url || '')
+  const [coverPreview, setCoverPreview] = useState('')
   const [isPublic, setIsPublic] = useState(Boolean(board?.is_public))
   const [isUploadingCover, setIsUploadingCover] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  const blobUrlsRef = useRef([])
+
+  // Fetch cover image with auth if it's an API URL
+  useEffect(() => {
+    if (!coverUrl || !coverUrl.startsWith('/api/upload/')) {
+      setCoverPreview(coverUrl)
+      return
+    }
+    let cancelled = false
+    const fetchCover = async () => {
+      try {
+        const res = await api.get(coverUrl.replace(/^\/api/, ''), { responseType: 'blob' })
+        if (!cancelled) {
+          const blobUrl = URL.createObjectURL(res.data)
+          blobUrlsRef.current.push(blobUrl)
+          setCoverPreview(blobUrl)
+        }
+      } catch {
+        if (!cancelled) setCoverPreview('')
+      }
+    }
+    fetchCover()
+    return () => { cancelled = true }
+  }, [coverUrl])
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      blobUrlsRef.current.forEach(URL.revokeObjectURL)
+    }
+  }, [])
 
   const handleCoverUpload = async (e) => {
     const file = e.target.files?.[0]
@@ -109,8 +141,8 @@ export default function BoardModal({ board, onClose, onCreate, onUpdate }) {
                   />
                   {isUploadingCover ? '上传中...' : '上传封面图'}
                 </label>
-                {coverUrl && (
-                  <img src={coverUrl} alt="" className="h-12 w-16 rounded border border-gray-200 object-cover" />
+                {coverPreview && (
+                  <img src={coverPreview} alt="" className="h-12 w-16 rounded border border-gray-200 object-cover" />
                 )}
               </div>
             )}

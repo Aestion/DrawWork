@@ -8,8 +8,11 @@ import {
   patchAssociativeLineInstance,
   getTencentMindLayout,
   getTencentMindTheme,
+  registerTencentMindThemes,
+  stabilizeAssociativeLineControlDrag,
   shouldRestoreTencentMindMediaNode,
   shouldSkipTencentRemoteApply,
+  TENCENT_MIND_THEME_CONFIGS,
   withTencentMindFormat
 } from './TencentMindEditor'
 
@@ -64,6 +67,18 @@ describe('TencentMind format helpers', () => {
       layout: 'fishbone',
       theme: { topic: 'green' }
     })
+  })
+
+  it('registers the visible theme dropdown options with simple-mind-map', () => {
+    const defineTheme = vi.fn()
+    const MindMap = { defineTheme }
+
+    registerTencentMindThemes(MindMap)
+    registerTencentMindThemes(MindMap)
+
+    expect(defineTheme).toHaveBeenCalledWith('green', TENCENT_MIND_THEME_CONFIGS.green)
+    expect(defineTheme).toHaveBeenCalledWith('dark', TENCENT_MIND_THEME_CONFIGS.dark)
+    expect(defineTheme).toHaveBeenCalledTimes(Object.keys(TENCENT_MIND_THEME_CONFIGS).length)
   })
 })
 
@@ -296,6 +311,48 @@ describe('associative line control drag guards', () => {
         targetIndex: 0
       }
     })).toBe(true)
+  })
+
+  it('stabilizes both associative line endpoints after a control point drag', () => {
+    const data = {
+      associativeLinePoint: [{
+        startPoint: { x: 0, y: 0 },
+        endPoint: { x: 100, y: 100 }
+      }],
+      associativeLineTargetControlOffsets: [[
+        { x: 20, y: 0 },
+        { x: -20, y: 0 }
+      ]]
+    }
+    const node = {
+      data,
+      nodeData: { data },
+      getData: vi.fn(key => (key ? data[key] : data)),
+      setData: vi.fn((key, value) => {
+        data[key] = value
+      })
+    }
+
+    expect(stabilizeAssociativeLineControlDrag({
+      isControlPointMousedown: true,
+      mousedownControlPointKey: 'controlPoint1',
+      activeLine: ['path', 'clickPath', 'text', node, {}],
+      controlPointMousemoveState: {
+        pos: { x: 72, y: 15 },
+        startPoint: { x: 10, y: 5 },
+        endPoint: { x: 130, y: 125 },
+        targetIndex: 0
+      }
+    })).toBe(true)
+
+    expect(data.associativeLinePoint[0]).toEqual({
+      startPoint: { x: 10, y: 5 },
+      endPoint: { x: 130, y: 125 }
+    })
+    expect(data.associativeLineTargetControlOffsets[0]).toEqual([
+      { x: 62, y: 10 },
+      { x: -20, y: 0 }
+    ])
   })
 
   it('patches the actual associative line instance listener and recovers plugin TypeErrors', () => {
