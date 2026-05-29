@@ -64,7 +64,7 @@ DrawWork/
 │   ├── src/
 │   │   ├── config/             # 数据库、Minio、Redis 配置
 │   │   ├── routes/             # API 路由 (auth/boards/canvases/votes 等)
-│   │   ├── models/             # Sequelize 数据模型 (15 个模型)
+│   │   ├── models/             # Sequelize 数据模型 (20 个模型)
 │   │   ├── middleware/         # 认证、权限中间件
 │   │   ├── utils/              # 工具 (JWT, DB, NotificationService)
 │   │   └── app.js              # Express 入口
@@ -74,21 +74,17 @@ DrawWork/
 │   ├── src/server.js           # WebSocket 服务器入口
 │   ├── Dockerfile
 │   └── package.json
-├── config/                       # 部署配置
-│   ├── docker-compose.yml      # Docker 编排 (6 个服务)
-│   ├── nginx.conf              # Nginx 反向代理配置
-│   ├── init.sql                # 数据库初始化脚本 (18 张表)
-│   ├── .env                    # 环境变量
-│   └── .env.example            # 环境变量示例
-├── scripts/                      # 运维脚本
-│   ├── deploy.sh               # 部署脚本
-│   ├── backup.sh               # 备份脚本
-│   ├── update.sh               # 更新脚本
+├── deploy/                       # 正式部署入口
+│   ├── docker-compose.yml      # Docker 编排
+│   ├── nginx/                  # Nginx 镜像和反向代理配置
+│   ├── database/               # PostgreSQL 初始化脚本
+│   ├── env/                    # 环境变量模板
+│   └── scripts/                # 部署、更新、备份脚本
+├── scripts/                      # 本地开发和辅助脚本
 │   └── start-dev.ps1           # 本地开发启动脚本 (PowerShell)
-├── docs/                         # 文档
-│   └── superpowers/
+├── docs/                         # 文档入口、部署、开发、架构和归档
 ├── test/                         # E2E 测试
-├── DrawWork_开发文档包/          # 开发文档
+├── DrawWork_开发文档包/          # 旧文档包迁移提示
 └── CLAUDE.md                     # Claude Code 项目指引
 ```
 
@@ -122,8 +118,8 @@ cd ..
 
 ```bash
 # 部署
-cd config
-docker-compose up -d --build
+cp deploy/env/.env.example deploy/.env
+make up
 
 # 访问
 # http://localhost
@@ -149,13 +145,12 @@ docker-compose up -d --build
 
 ## 文档索引
 
-1. [项目概述](./01_项目概述.md)（本文档）
-2. [功能需求](./02_功能需求.md)
-3. [技术架构](./03_技术架构.md)
-4. [数据库设计](./04_数据库设计.md)
-5. [配置文件说明](./05_配置文件说明.md)
-6. [实施计划](./06_实施计划.md)
-7. [运维手册](./07_运维手册.md)
+1. [文档入口](../README.md)
+2. [生产部署检查清单](../deployment/production-checklist.md)
+3. [Docker 部署指南](../deployment/docker-deploy.md)
+4. [运维手册](../deployment/operations-runbook.md)
+5. [技术架构](./api-and-system.md)
+6. [数据库设计](./database.md)
 
 ---
 

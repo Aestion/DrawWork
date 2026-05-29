@@ -1,0 +1,8 @@
+[mcp_servers.chrome-devtools-mcp]
+args = [
+    "chrome-devtools-mcp@latest",
+    "--viewport",
+    "1280x720",
+    "--categoryNetwork",
+]
+command = "npx"

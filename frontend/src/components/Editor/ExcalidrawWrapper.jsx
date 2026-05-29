@@ -464,7 +464,15 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     )
     return {
       elements: toRenderableElements(filteredElements),
-      appState: { viewBackgroundColor: '#ffffff', collaborators: new Map() },
+      appState: {
+        viewBackgroundColor: '#ffffff',
+        collaborators: new Map(),
+        currentItemStrokeWidth: 1,
+        currentItemStrokeStyle: 'solid',
+        currentItemRoughness: 0,
+        currentItemFillStyle: 'solid',
+        currentItemOpacity: 100
+      },
       files: buildRenderableFiles(filteredFiles)
     }
   }, [])
@@ -1359,6 +1367,17 @@ const ExcalidrawWrapper = forwardRef(function ExcalidrawWrapper({ canvasId, room
     if (process.env.NODE_ENV !== 'production' || ['localhost', '127.0.0.1'].includes(window.location.hostname)) {
       window.__EXCALIDRAW__ = apiInstance
     }
+
+    // Set default values for new shapes
+    apiInstance.updateScene({
+      appState: {
+        currentItemStrokeWidth: 1,
+        currentItemStrokeStyle: 'solid',
+        currentItemRoughness: 0,
+        currentItemFillStyle: 'solid',
+        currentItemOpacity: 100
+      }
+    })
 
     const currentScene = sceneRef.current
     if (currentScene.elements.length === 0 && Object.keys(currentScene.files || {}).length === 0) {

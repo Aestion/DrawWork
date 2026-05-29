@@ -5,7 +5,8 @@ node_modules/
 .env
 .env.*
 !.env.docker
-config/.env
+!deploy/env/.env.example
+deploy/.env
 
 # Build output
 dist/

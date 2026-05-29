@@ -16,7 +16,7 @@ RUN apk add --no-cache curl
 
 COPY --from=frontend-build /app/frontend/dist /usr/share/nginx/html
 COPY --from=frontend-build /app/frontend/node_modules/@excalidraw/excalidraw/dist/excalidraw-assets /usr/share/nginx/html/node_modules/@excalidraw/excalidraw/dist/excalidraw-assets
-COPY config/nginx.conf /etc/nginx/nginx.conf
+COPY deploy/nginx/nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 80 443
 

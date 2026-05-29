@@ -1,10 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $repo = Split-Path -Parent $PSScriptRoot
-$envFile = Join-Path $repo "config\.env"
+$envFile = Join-Path $repo "deploy\.env"
 
 if (!(Test-Path $envFile)) {
-  throw "Missing config\.env. Copy config\.env.example first."
+  throw "Missing deploy\.env. Copy deploy\env\.env.example first."
 }
 
 $envMap = @{}

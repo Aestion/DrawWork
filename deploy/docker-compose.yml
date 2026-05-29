@@ -3,7 +3,7 @@ services:
   nginx:
     build:
       context: ..
-      dockerfile: config/Dockerfile
+      dockerfile: deploy/nginx/Dockerfile
     container_name: drawwork-nginx
     ports:
       - "80:80"
@@ -104,7 +104,7 @@ services:
       - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
       - ../data/postgres:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
       - ../backups:/backups
     networks:
       - drawwork-network
@@ -146,6 +146,7 @@ services:
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
+      - "9001:9001"
     environment:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-minioadmin123}
